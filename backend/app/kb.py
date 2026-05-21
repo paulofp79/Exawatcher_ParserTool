@@ -10,7 +10,7 @@ except Exception:  # pragma: no cover - dependency fallback for parser-only test
     yaml = None
 
 
-@dataclass(slots=True)
+@dataclass
 class KnowledgeEntry:
     id: str
     title: str
@@ -70,4 +70,3 @@ def load_knowledge_base(path: Path) -> list[KnowledgeEntry]:
 
 def match_kb(pattern_id: str, entries: list[KnowledgeEntry]) -> list[str]:
     return [entry.id for entry in entries if pattern_id in entry.matched_patterns]
-

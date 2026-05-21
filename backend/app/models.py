@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 
-@dataclass(slots=True)
+@dataclass
 class MetricRow:
     case_id: str
     host: str
@@ -20,7 +20,7 @@ class MetricRow:
     raw_snippet_ref: str = ""
 
 
-@dataclass(slots=True)
+@dataclass
 class EvidenceSnippet:
     ref: str
     source_file: str
@@ -28,7 +28,7 @@ class EvidenceSnippet:
     text: str
 
 
-@dataclass(slots=True)
+@dataclass
 class Finding:
     id: str
     case_id: str
@@ -48,7 +48,7 @@ class Finding:
     kb_ids: list[str] = field(default_factory=list)
 
 
-@dataclass(slots=True)
+@dataclass
 class CaseMetadata:
     id: str
     name: str
@@ -70,4 +70,3 @@ def row_to_dict(row: Any) -> dict[str, Any]:
     if hasattr(row, "__dataclass_fields__"):
         return {name: getattr(row, name) for name in row.__dataclass_fields__}
     return dict(row)
-

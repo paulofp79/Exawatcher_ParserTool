@@ -63,7 +63,7 @@ TIME_RE = re.compile(r"^(\d{2}:\d{2}:\d{2}\s+[AP]M)")
 NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 
 
-@dataclass(slots=True)
+@dataclass
 class ParseResult:
     root_path: str
     host: str = ""

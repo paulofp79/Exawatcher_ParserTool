@@ -26,6 +26,6 @@ git remote remove linuxbox >/dev/null 2>&1 || true
 git remote add linuxbox "ssh://${REMOTE_HOST}${REMOTE_PATH}"
 git push linuxbox macos:macos macos:linux
 
-ssh "${REMOTE_HOST}" "cd '${REMOTE_PATH}' && git switch linux"
+ssh "${REMOTE_HOST}" "cd '${REMOTE_PATH}' && git checkout linux"
 
 echo "Synced macos branch to Linux and refreshed linux branch at ${REMOTE_HOST}:${REMOTE_PATH}"

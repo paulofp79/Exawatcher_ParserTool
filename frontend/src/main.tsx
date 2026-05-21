@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AlertTriangle, BarChart3, BookOpen, Clipboard, Database, FileSearch, RefreshCw, Upload } from "lucide-react";
 import "./styles.css";
 
 const API = "http://localhost:8000";
@@ -59,6 +58,14 @@ type PromptPacket = {
   prompt: string;
   knowledge_base_matches: Record<string, { title: string; explanation: string; recommended_checks: string[] }>;
 };
+
+function Icon({ name, size = 18 }: { name: string; size?: number }) {
+  return (
+    <span className="ui-icon" style={{ width: size, height: size, fontSize: Math.max(12, size - 2) }} aria-hidden="true">
+      {name}
+    </span>
+  );
+}
 
 function App() {
   const [cases, setCases] = useState<CaseMeta[]>([]);
@@ -156,7 +163,7 @@ function App() {
           <p>{selectedCase ? `${selectedCase.host || "Unknown host"} · ${selectedCase.started_at || "Unknown start"} to ${selectedCase.ended_at || "Unknown end"}` : "Import a storage cell bundle"}</p>
         </div>
         <button className="icon-button" onClick={refreshCases} title="Refresh cases">
-          <RefreshCw size={18} />
+          <Icon name="R" size={18} />
         </button>
       </section>
 
@@ -166,7 +173,7 @@ function App() {
           <input value={path} onChange={(event) => setPath(event.target.value)} />
         </label>
         <button className="primary" onClick={importCase} disabled={busy}>
-          <Upload size={18} />
+          <Icon name="U" size={18} />
           Import
         </button>
         <select value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
@@ -182,16 +189,16 @@ function App() {
       {error && <div className="error-line">{error}</div>}
 
       <section className="overview-grid">
-        <MetricTile icon={<AlertTriangle size={18} />} label="Critical" value={severityCounts.critical} tone="critical" />
-        <MetricTile icon={<FileSearch size={18} />} label="Warnings" value={severityCounts.warning} tone="warning" />
-        <MetricTile icon={<Database size={18} />} label="Metrics" value={selectedCase?.metric_count ?? 0} />
-        <MetricTile icon={<BookOpen size={18} />} label="Modules" value={selectedCase?.modules.length ?? 0} />
+        <MetricTile icon={<Icon name="!" />} label="Critical" value={severityCounts.critical} tone="critical" />
+        <MetricTile icon={<Icon name="?" />} label="Warnings" value={severityCounts.warning} tone="warning" />
+        <MetricTile icon={<Icon name="#" />} label="Metrics" value={selectedCase?.metric_count ?? 0} />
+        <MetricTile icon={<Icon name="K" />} label="Modules" value={selectedCase?.modules.length ?? 0} />
       </section>
 
       <section className="work-grid">
         <div className="panel findings-panel">
           <div className="panel-title">
-            <AlertTriangle size={18} />
+            <Icon name="!" />
             <h2>Findings</h2>
           </div>
           <div className="finding-list">
@@ -210,7 +217,7 @@ function App() {
 
         <div className="panel detail-panel">
           <div className="panel-title">
-            <FileSearch size={18} />
+            <Icon name="E" />
             <h2>Evidence</h2>
           </div>
           {activeFinding ? (
@@ -222,7 +229,7 @@ function App() {
 
         <div className="panel chart-panel">
           <div className="panel-title">
-            <BarChart3 size={18} />
+            <Icon name="T" />
             <h2>Metric Timeline</h2>
           </div>
           <MetricBars metrics={chartMetrics} />
@@ -230,10 +237,10 @@ function App() {
 
         <div className="panel prompt-panel">
           <div className="panel-title">
-            <Clipboard size={18} />
+            <Icon name="P" />
             <h2>Prompt Packet</h2>
             <button className="icon-button" title="Copy prompt packet" onClick={() => packet?.prompt && navigator.clipboard.writeText(packet.prompt)}>
-              <Clipboard size={16} />
+              <Icon name="C" size={16} />
             </button>
           </div>
           <textarea value={packet?.prompt ?? ""} readOnly />
@@ -321,4 +328,3 @@ function summarizeMetrics(metrics: Metric[]) {
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
-

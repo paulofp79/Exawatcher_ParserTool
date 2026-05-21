@@ -1,0 +1,101 @@
+- id: high_device_utilization
+  title: High disk or flash device utilization
+  symptoms:
+    - Iostat device %util approaches saturation.
+    - Application latency may rise while throughput is concentrated on a subset of devices.
+  matched_patterns:
+    - io.high_util
+    - io.device_skew
+  explanation: Sustained high utilization on a cell disk, flash disk, or md device can indicate an overloaded storage path, skewed workload, rebalance activity, or a slow device.
+  recommended_checks:
+    - Compare busy devices against peer devices in the same interval.
+    - Review CellSrvStat and CellSqlStat near the same timestamp for workload source.
+    - Check disk predictive failure, rebalance, and cell alert history outside ExaWatcher.
+  severity_guidance: Critical if multiple intervals exceed 90 percent or one device is much busier than peers during user-visible latency.
+- id: elevated_io_wait
+  title: Elevated storage wait or device await
+  symptoms:
+    - Iostat r_await or w_await is elevated.
+    - CPU iowait may increase at the same time.
+  matched_patterns:
+    - io.high_read_await
+    - io.high_write_await
+    - cpu.iowait
+  explanation: High await values point to delayed I/O completion. On storage cells, compare affected device classes and determine whether the delay is flash, disk, md, or system-wide.
+  recommended_checks:
+    - Correlate await spikes with %util, queue size, and top processes.
+    - Inspect RoCE and network counters for transport symptoms.
+    - Compare with database AWR/ASH wait events for the same time window.
+  severity_guidance: Warning for isolated spikes; critical when sustained or paired with workload impact.
+- id: cpu_saturation
+  title: Storage cell CPU saturation
+  symptoms:
+    - Mpstat all CPU idle drops sharply.
+    - System, softirq, or iowait CPU consumption rises.
+  matched_patterns:
+    - cpu.high_usage
+    - cpu.softirq
+    - cpu.iowait
+  explanation: Storage cell CPU pressure can affect cellsrv, network processing, and I/O service times. Softirq pressure may point toward network or RoCE packet processing.
+  recommended_checks:
+    - Review Top and TopPid for cellsrv, kworker, compression, or network-heavy processes.
+    - Correlate softirq with Rocestat, Roceaudit, and Netstat findings.
+    - Verify whether CPU pressure aligns with known maintenance windows.
+  severity_guidance: Critical if all-CPU usage remains above 90 percent or softirq/iowait dominates during an incident.
+- id: memory_pressure
+  title: Memory pressure or swap activity
+  symptoms:
+    - Meminfo available memory is low.
+    - Vmstat swap in/out activity appears.
+  matched_patterns:
+    - memory.low_available
+    - memory.swap_activity
+  explanation: Memory pressure on a storage cell can disturb cache behavior and increase process scheduling or I/O latency.
+  recommended_checks:
+    - Review top memory consumers from Top/TopPid/Ps.
+    - Check whether cellsrv memory grows unusually during the time window.
+    - Look for concurrent maintenance or diagnostics jobs.
+  severity_guidance: Warning for low available memory; critical when swap activity is sustained.
+- id: network_roce_errors
+  title: Network or RoCE error signals
+  symptoms:
+    - RoCE audit/stat output contains errors or drops.
+    - Netstat counters show retransmits, drops, or interface errors.
+  matched_patterns:
+    - network.error_signal
+    - roce.error_signal
+  explanation: Transport issues can surface as I/O latency even when disks and flash are healthy. RoCE symptoms deserve correlation with host-side database wait events.
+  recommended_checks:
+    - Compare RoCE counters across ports and timestamps.
+    - Check switch, NIC, and cell alert logs for matching errors.
+    - Correlate with database gc/cr block waits or cell single block latency.
+  severity_guidance: Critical when errors are repeated or align with latency spikes.
+- id: cellsrv_anomaly
+  title: Cell services or cell disk anomaly
+  symptoms:
+    - CellSrvStat, CellSqlStat, ECStat, or ECStatJSON contains unusual error/latency counters.
+    - Cell disk metadata suggests offline or abnormal device state.
+  matched_patterns:
+    - cell.error_signal
+    - cell.latency_signal
+    - cell.disk_state
+  explanation: Cell-level counters connect device symptoms to Exadata services and SQL offload behavior.
+  recommended_checks:
+    - Inspect cell alert history and MS/cellsrv logs around the timestamp.
+    - Compare affected celldisks and griddisks with peer devices.
+    - Review offload, flash cache, and smart scan counters for abrupt changes.
+  severity_guidance: Warning for isolated counters; critical for offline devices, repeated errors, or service-level failures.
+- id: module_coverage_gap
+  title: Missing or stale ExaWatcher module coverage
+  symptoms:
+    - Expected storage-cell modules are absent.
+    - Timestamps do not cover the requested incident window.
+  matched_patterns:
+    - coverage.missing_module
+    - coverage.stale_module
+  explanation: Incomplete module coverage can hide the root cause or weaken confidence in findings.
+  recommended_checks:
+    - Confirm the collection time window and ExaWatcher archive count.
+    - Recollect from the target cell if the incident window is missing.
+    - Use available modules as supporting rather than definitive evidence.
+  severity_guidance: Informational unless the missing module is central to the incident hypothesis.

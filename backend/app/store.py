@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from .models import CaseMetadata, EvidenceSnippet, Finding, MetricRow, row_to_dict
 
@@ -175,7 +175,7 @@ class Store:
             rows = conn.execute("select * from cases order by imported_at desc").fetchall()
         return [case_from_row(row) for row in rows]
 
-    def get_case(self, case_id: str) -> dict[str, Any] | None:
+    def get_case(self, case_id: str) -> Optional[dict[str, Any]]:
         with self.connect() as conn:
             row = conn.execute("select * from cases where id = ?", (case_id,)).fetchone()
         return case_from_row(row) if row else None
@@ -217,7 +217,7 @@ class Store:
             findings.append(item)
         return findings
 
-    def get_snippets(self, case_id: str, refs: list[str] | None = None) -> list[dict[str, Any]]:
+    def get_snippets(self, case_id: str, refs: Optional[list[str]] = None) -> list[dict[str, Any]]:
         with self.connect() as conn:
             if refs:
                 placeholders = ",".join("?" for _ in refs)
@@ -229,7 +229,7 @@ class Store:
                 rows = conn.execute("select ref, source_file, timestamp, text from snippets where case_id = ?", (case_id,)).fetchall()
         return [dict(row) for row in rows]
 
-    def get_prompt_packet(self, case_id: str) -> dict[str, Any] | None:
+    def get_prompt_packet(self, case_id: str) -> Optional[dict[str, Any]]:
         with self.connect() as conn:
             row = conn.execute("select packet_json from prompt_packets where case_id = ?", (case_id,)).fetchone()
         return json.loads(row["packet_json"]) if row else None
@@ -302,4 +302,3 @@ def render_prompt(packet: dict[str, Any]) -> str:
     for kb_id, entry in packet["knowledge_base_matches"].items():
         lines.append(f"- {kb_id}: {entry['title']} - {entry['explanation']}")
     return "\n".join(lines)
-

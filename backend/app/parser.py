@@ -8,7 +8,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional, Tuple
 
 from .models import EvidenceSnippet, MetricRow
 
@@ -75,7 +75,7 @@ class ParseResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def resolve_bundle(path: str) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
+def resolve_bundle(path: str) -> Tuple[Path, Optional[tempfile.TemporaryDirectory]]:
     source = Path(path).expanduser().resolve()
     if not source.exists():
         raise FileNotFoundError(f"Bundle path does not exist: {source}")
@@ -184,7 +184,7 @@ def detect_host(lines: list[str], fallback: str) -> str:
     return next((part for part in parts if "." in part), "")
 
 
-def parse_any_timestamp(text: str, current_date: str | None = None) -> str:
+def parse_any_timestamp(text: str, current_date: Optional[str] = None) -> str:
     text = text.strip()
     for fmt in ("%m/%d/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
         try:

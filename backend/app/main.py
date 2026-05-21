@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,7 +31,7 @@ store = Store(DATA_DIR / "exawatcher.db", DATA_DIR / "cases")
 
 class ImportRequest(BaseModel):
     path: str
-    name: str | None = None
+    name: Optional[str] = None
 
 
 @app.get("/api/health")
@@ -108,4 +109,3 @@ def get_prompt_packet(case_id: str) -> dict[str, object]:
 
 def case_id_for(path: str) -> str:
     return hashlib.sha1(path.encode("utf-8")).hexdigest()[:12]
-

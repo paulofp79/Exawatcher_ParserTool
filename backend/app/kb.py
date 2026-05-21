@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 try:
     import yaml
@@ -23,8 +23,8 @@ class KnowledgeEntry:
 
 def _fallback_parse(text: str) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    active_list: str | None = None
+    current: Optional[dict[str, Any]] = None
+    active_list: Optional[str] = None
     for raw in text.splitlines():
         line = raw.rstrip()
         if line.startswith("- id:"):

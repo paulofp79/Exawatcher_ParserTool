@@ -134,6 +134,14 @@ button:disabled {
   color: #8a1f16;
 }
 
+.hidden {
+  display: none;
+}
+
+.panel-empty {
+  padding: 12px;
+}
+
 .overview-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(150px, 1fr));

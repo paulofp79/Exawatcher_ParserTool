@@ -4,10 +4,98 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ExaWatcher Workbench</title>
+    <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <main class="app-shell">
+      <section class="topbar">
+        <div>
+          <h1>ExaWatcher Workbench</h1>
+          <p id="case-subtitle">Import a storage cell bundle</p>
+        </div>
+        <button class="icon-button" id="refresh-button" title="Refresh cases">
+          <span class="ui-icon">R</span>
+        </button>
+      </section>
+
+      <section class="control-band">
+        <label class="path-input">
+          <span>Bundle path</span>
+          <input id="bundle-path" />
+        </label>
+        <button class="primary" id="import-button">
+          <span class="ui-icon">U</span>
+          Import
+        </button>
+        <select id="case-select">
+          <option value="">No case selected</option>
+        </select>
+      </section>
+
+      <div class="error-line hidden" id="error-line"></div>
+
+      <section class="overview-grid">
+        <div class="metric-tile critical">
+          <span class="ui-icon">!</span>
+          <span>Critical</span>
+          <strong id="critical-count">0</strong>
+        </div>
+        <div class="metric-tile warning">
+          <span class="ui-icon">?</span>
+          <span>Warnings</span>
+          <strong id="warning-count">0</strong>
+        </div>
+        <div class="metric-tile">
+          <span class="ui-icon">#</span>
+          <span>Metrics</span>
+          <strong id="metric-count">0</strong>
+        </div>
+        <div class="metric-tile">
+          <span class="ui-icon">K</span>
+          <span>Modules</span>
+          <strong id="module-count">0</strong>
+        </div>
+      </section>
+
+      <section class="work-grid">
+        <div class="panel findings-panel">
+          <div class="panel-title">
+            <span class="ui-icon">!</span>
+            <h2>Findings</h2>
+          </div>
+          <div class="finding-list" id="finding-list"></div>
+        </div>
+
+        <div class="panel detail-panel">
+          <div class="panel-title">
+            <span class="ui-icon">E</span>
+            <h2>Evidence</h2>
+          </div>
+          <div class="finding-detail" id="finding-detail">
+            <p class="muted">No findings loaded.</p>
+          </div>
+        </div>
+
+        <div class="panel chart-panel">
+          <div class="panel-title">
+            <span class="ui-icon">T</span>
+            <h2>Metric Timeline</h2>
+          </div>
+          <div class="metric-bars" id="metric-bars"></div>
+        </div>
+
+        <div class="panel prompt-panel">
+          <div class="panel-title">
+            <span class="ui-icon">P</span>
+            <h2>Prompt Packet</h2>
+            <button class="icon-button" id="copy-prompt" title="Copy prompt packet">
+              <span class="ui-icon">C</span>
+            </button>
+          </div>
+          <textarea id="prompt-packet" readonly></textarea>
+        </div>
+      </section>
+    </main>
+    <script src="./src/app.js"></script>
   </body>
 </html>
-

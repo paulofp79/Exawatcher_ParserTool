@@ -21,7 +21,7 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 ssh "${REMOTE_HOST}" "mkdir -p '${REMOTE_PATH}'"
-ssh "${REMOTE_HOST}" "cd '${REMOTE_PATH}' && if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git init -b linux; fi && git config receive.denyCurrentBranch updateInstead"
+ssh "${REMOTE_HOST}" "cd '${REMOTE_PATH}' && if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git init && git checkout -b linux; fi && git config receive.denyCurrentBranch updateInstead"
 git remote remove linuxbox >/dev/null 2>&1 || true
 git remote add linuxbox "ssh://${REMOTE_HOST}${REMOTE_PATH}"
 git push linuxbox macos:macos macos:linux

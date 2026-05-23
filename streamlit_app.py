@@ -60,6 +60,11 @@ CELL_SQLSTAT_BYTE_FIELDS = [
     "Storage Index Saved Bytes",
     "Passthru Bytes",
 ]
+CELL_SRVSTAT_DESCRIPTIONS = {
+    "Input/Output related stats": "CellSrv I/O counters, queueing, latency warnings, per-disk utilization, pending I/O, and FlashCache counters.",
+    "Memory related stats": "SGA/PGA/cellsrv/kernel memory allocation and top memory consumers.",
+    "Execution related stats": "CellSrv job execution, thread waits, buffer pressure, predicate/offload scheduling, and CPU scheduling ratios.",
+}
 
 
 @dataclass
@@ -231,6 +236,9 @@ def render_tool_tab(root: Path, summary: ToolSummary, max_rows: int) -> None:
     if summary.tool == "CellSqlStat":
         render_cellsqlstat(df)
         return
+    if summary.tool == "CellSrvStat":
+        render_cellsrvstat(df)
+        return
 
     metric_names = sorted(df["metric"].dropna().unique().tolist())
     entity_names = sorted(df["entity"].dropna().unique().tolist())
@@ -305,6 +313,8 @@ def parse_tool(root_text: str, relative_tool_path: str, max_rows: int) -> pd.Dat
             rows.extend(parse_json_metrics(text_rows, file_path, root, module, max_rows - len(rows)))
         elif module == "CellSqlStat":
             rows.extend(parse_cellsqlstat(text_rows, file_path, root, max_rows - len(rows)))
+        elif module == "CellSrvStat":
+            rows.extend(parse_cellsrvstat(text_rows, file_path, root, max_rows - len(rows)))
         else:
             rows.extend(parse_key_values(text_rows, file_path, root, module, max_rows - len(rows)))
             if len(rows) < max_rows:
@@ -379,6 +389,210 @@ def pivot_cellsqlstat(df: pd.DataFrame) -> pd.DataFrame:
     detail = df.pivot_table(index=index_cols, columns="metric", values="value", aggfunc="max").reset_index()
     detail.columns.name = None
     return detail
+
+
+def render_cellsrvstat(df: pd.DataFrame) -> None:
+    with st.expander("CellSrvStat sections", expanded=True):
+        st.dataframe(
+            pd.DataFrame([{"Section": key, "Description": value} for key, value in CELL_SRVSTAT_DESCRIPTIONS.items()]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    sections = sorted(df["section"].dropna().unique().tolist()) if "section" in df.columns else []
+    groups = sorted(df["group"].dropna().unique().tolist()) if "group" in df.columns else []
+    c1, c2 = st.columns(2)
+    section = c1.selectbox("Section", ["All"] + sections, key="section_CellSrvStat")
+    group = c2.selectbox("Table / group", ["All"] + groups, key="group_CellSrvStat")
+
+    view = df.copy()
+    if section != "All":
+        view = view[view["section"] == section]
+    if group != "All":
+        view = view[view["group"] == group]
+    if view.empty:
+        st.info("No CellSrvStat rows match this section/group.")
+        return
+
+    metric_names = sorted(view["metric"].dropna().unique().tolist())
+    default_metric = pick_default_cellsrv_metric(metric_names)
+    metric = st.selectbox("Metric", metric_names, index=metric_names.index(default_metric), key="metric_CellSrvStat_special")
+    metric_df = view[view["metric"] == metric].copy()
+    entity_names = sorted(metric_df["entity"].dropna().unique().tolist())
+    top_entities = metric_df.sort_values("value", ascending=False)["entity"].drop_duplicates().head(12).tolist()
+    entities = st.multiselect("Entities", entity_names, default=top_entities, key="entity_CellSrvStat_special")
+    if entities:
+        metric_df = metric_df[metric_df["entity"].isin(entities)]
+
+    if metric_df.empty:
+        st.info("No CellSrvStat rows match the current metric/entity selection.")
+    else:
+        pivot = metric_df.pivot_table(index="timestamp", columns="entity", values="value", aggfunc="max").sort_index()
+        st.line_chart(pivot, use_container_width=True)
+
+    preferred = ["timestamp", "section", "group", "entity", "metric", "value", "unit", "sample_value", "source"]
+    visible = [col for col in preferred if col in view.columns]
+    rest = [col for col in view.columns if col not in visible]
+    st.dataframe(view[visible + rest].head(1500), use_container_width=True, hide_index=True)
+
+
+def pick_default_cellsrv_metric(metric_names: List[str]) -> str:
+    preferred = [
+        "I/O utilization per disk",
+        "Number of disk IO errors",
+        "Number of latency threshold warnings during job",
+        "High water mark of pending I/O count per disk",
+        "OS memory allocated to cellsrv (KB)",
+        "Number of threads waiting for network",
+        "Total number of jobs waited for buffers",
+    ]
+    for metric in preferred:
+        if metric in metric_names:
+            return metric
+    return metric_names[0]
+
+
+def parse_cellsrvstat(lines: List[str], path: Path, root: Path, limit: int) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    timestamp = timestamp_from_filename(path.name)
+    section = ""
+    group = ""
+    table_header: List[str] = []
+    for line in lines:
+        if len(rows) >= limit:
+            break
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("===") and "Current Time" in stripped:
+            parsed = parse_cellsrv_current_time(stripped)
+            timestamp = parsed or timestamp
+            continue
+        if stripped.startswith("==") and stripped.endswith("=="):
+            section = stripped.strip("= ").strip()
+            group = ""
+            table_header = []
+            continue
+        if stripped.startswith("END "):
+            group = ""
+            table_header = []
+            continue
+        if stripped.startswith(("#", "zzz")):
+            zzz = ZZZ_RE.search(stripped)
+            if zzz:
+                timestamp = parse_any_timestamp(zzz.group(1)) or timestamp
+            continue
+        scalar = parse_cellsrv_scalar_row(stripped, timestamp, section, path, root)
+        if scalar:
+            rows.append(scalar)
+            continue
+        if group:
+            tokens = stripped.split()
+            if not any(cellsrv_value_token(token) is not None for token in tokens):
+                table_header = tokens
+                continue
+            rows.extend(parse_cellsrv_table_row(stripped, timestamp, section, group, table_header, path, root))
+            continue
+        if should_start_cellsrv_group(stripped):
+            group = stripped
+            table_header = []
+    return rows[:limit]
+
+
+def parse_cellsrv_current_time(line: str) -> str:
+    parts = line.split("===", 2)
+    text = parts[-1].strip() if parts else ""
+    for fmt in ("%a %b %d %H:%M:%S %Y", "%a %b %e %H:%M:%S %Y"):
+        try:
+            return datetime.strptime(text, fmt).isoformat()
+        except Exception:
+            pass
+    return ""
+
+
+def should_start_cellsrv_group(line: str) -> bool:
+    if not line or line.startswith("Thread "):
+        return False
+    tokens = line.split()
+    return len(tokens) >= 2 and not any(cellsrv_value_token(token) is not None for token in tokens)
+
+
+def parse_cellsrv_scalar_row(line: str, timestamp: str, section: str, path: Path, root: Path) -> Optional[Dict[str, Any]]:
+    tokens = line.split()
+    if len(tokens) < 3:
+        return None
+    sample = cellsrv_value_token(tokens[-2])
+    value = cellsrv_value_token(tokens[-1])
+    if sample is None or value is None:
+        return None
+    metric = " ".join(tokens[:-2]).strip()
+    if not metric:
+        return None
+    item = row(timestamp, "CellSrvStat", metric, value, infer_unit(metric, ""), path, root)
+    item.update({"section": section, "group": "Scalar counters", "sample_value": sample})
+    return item
+
+
+def parse_cellsrv_table_row(
+    line: str,
+    timestamp: str,
+    section: str,
+    group: str,
+    table_header: List[str],
+    path: Path,
+    root: Path,
+) -> List[Dict[str, Any]]:
+    tokens = line.split()
+    rows: List[Dict[str, Any]] = []
+    if len(tokens) < 3:
+        return rows
+    if group == "GridDisk FlashCache stats" and len(tokens) >= 4:
+        sample = cellsrv_value_token(tokens[-2])
+        value = cellsrv_value_token(tokens[-1])
+        if sample is None or value is None:
+            return rows
+        entity = tokens[0]
+        metric = tokens[1]
+        item = row(timestamp, entity, metric, value, infer_unit(metric, ""), path, root)
+        item.update({"section": section, "group": group, "sample_value": sample})
+        rows.append(item)
+        return rows
+    if table_header and len(tokens) >= 2:
+        entity = tokens[0]
+        for idx, token in enumerate(tokens[1:], start=1):
+            value = cellsrv_value_token(token)
+            if value is None:
+                continue
+            metric = table_header[idx - 1] if idx - 1 < len(table_header) else f"col_{idx}"
+            item = row(timestamp, entity, metric, value, infer_unit(metric, ""), path, root)
+            item.update({"section": section, "group": group, "sample_value": ""})
+            rows.append(item)
+        return rows
+    sample = cellsrv_value_token(tokens[-2])
+    value = cellsrv_value_token(tokens[-1])
+    if sample is None or value is None:
+        return rows
+    entity = " ".join(tokens[:-2]).strip()
+    if not entity:
+        return rows
+    item = row(timestamp, entity, group, value, infer_unit(group, ""), path, root)
+    item.update({"section": section, "group": group, "sample_value": sample})
+    rows.append(item)
+    return rows
+
+
+def cellsrv_value_token(token: str) -> Optional[float]:
+    cleaned = token.strip().replace(",", "")
+    if not cleaned or cleaned == "-":
+        return None
+    if cleaned.endswith("/s"):
+        cleaned = cleaned[:-2]
+    if re.match(r"^-?\d+(?:\.\d+)?$", cleaned) is None:
+        return None
+    try:
+        return float(cleaned)
+    except Exception:
+        return None
 
 
 def parse_cellsqlstat(lines: List[str], path: Path, root: Path, limit: int) -> List[Dict[str, Any]]:
@@ -739,6 +953,8 @@ def detect_numeric_problems(module: str, df: pd.DataFrame) -> List[Dict[str, Any
     problems: List[Dict[str, Any]] = []
     if module == "CellSqlStat":
         return detect_cellsqlstat_problems(df)
+    if module == "CellSrvStat":
+        return detect_cellsrvstat_problems(df)
     checks = [
         ("%util", 90, "critical", "High device utilization"),
         ("%util", 80, "warning", "Elevated device utilization"),
@@ -793,6 +1009,43 @@ def detect_numeric_problems(module: str, df: pd.DataFrame) -> List[Dict[str, Any
                         "source": worst["source"],
                     }
                 )
+    return problems
+
+
+def detect_cellsrvstat_problems(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    checks = [
+        ("Number of disk IO errors", 0, "critical", "CellSrv disk I/O errors"),
+        ("Number of latency threshold warnings during job", 0, "warning", "CellSrv latency warnings during jobs"),
+        ("Number of latency threshold warnings by checker", 0, "warning", "CellSrv checker latency warnings"),
+        ("Number of latency threshold warnings for smart IO", 0, "warning", "CellSrv smart I/O latency warnings"),
+        ("Number of latency threshold warnings for redolog writes", 0, "critical", "CellSrv redolog write latency warnings"),
+        ("I/O utilization per disk", 80, "critical", "High CellSrv per-disk I/O utilization"),
+        ("I/O utilization per disk", 60, "warning", "Elevated CellSrv per-disk I/O utilization"),
+        ("High water mark of pending I/O count per disk", 100, "warning", "High pending I/O count per disk"),
+        ("Total number of jobs waited for buffers", 0, "warning", "CellSrv jobs waited for buffers"),
+        ("Current number of jobs waiting for buffers", 0, "critical", "CellSrv jobs currently waiting for buffers"),
+        ("Number of threads waiting for network", 100, "warning", "Many CellSrv threads waiting for network"),
+        ("Number of threads waiting for resource", 50, "warning", "Many CellSrv threads waiting for resource"),
+    ]
+    problems: List[Dict[str, Any]] = []
+    for metric, threshold, severity, title in checks:
+        subset = df[(df["metric"] == metric) & (df["value"] > threshold)]
+        if subset.empty:
+            continue
+        worst = subset.sort_values("value", ascending=False).iloc[0]
+        problems.append(
+            {
+                "severity": severity,
+                "tool": "CellSrvStat",
+                "title": title,
+                "time": str(worst["timestamp"]),
+                "entity": worst["entity"],
+                "metric": metric,
+                "value": round(float(worst["value"]), 3),
+                "source": worst["source"],
+                "detail": f"{worst.get('section', '')} / {worst.get('group', '')}",
+            }
+        )
     return problems
 
 

@@ -1,6 +1,6 @@
-const API = "http://localhost:8000";
+const API = window.location.origin;
 const SAMPLE_PATH =
-  "/Users/pporacle/Downloads/exacd_logcol_9cce58d4-1ea8-4c4a-8e63-bb44b3fa6044_cmds_gru126171exdcl18_exawatcher_20260513_190000_20260513_220000";
+  "/root/PP/ExaWatcher_gru126171exdcl18.oraclecloud.internal_2026-05-13_19_00_00_3h00m00s";
 
 const state = {
   cases: [],

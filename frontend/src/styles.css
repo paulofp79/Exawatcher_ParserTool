@@ -142,6 +142,136 @@ button:disabled {
   padding: 12px;
 }
 
+.tab-bar {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0 12px;
+}
+
+.tab-button {
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 12px;
+  color: #24332b;
+  background: #e7ece8;
+  border: 1px solid #d3dcd5;
+}
+
+.tab-button.active {
+  color: #ffffff;
+  background: #1f6f5a;
+  border-color: #1f6f5a;
+}
+
+.summary-view,
+.module-view {
+  min-height: 60vh;
+}
+
+.table-wrap {
+  overflow: auto;
+}
+
+.module-table,
+.metric-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.module-table th,
+.module-table td,
+.metric-table th,
+.metric-table td {
+  border-bottom: 1px solid #edf1ed;
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.module-table th,
+.metric-table th {
+  position: sticky;
+  top: 0;
+  background: #f7faf7;
+  color: #526057;
+  font-weight: 700;
+  z-index: 1;
+}
+
+.command-cell {
+  max-width: 460px;
+  overflow-wrap: anywhere;
+  color: #4f5d54;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.link-button {
+  padding: 0;
+  color: #1f6f5a;
+  background: transparent;
+  font-weight: 700;
+  text-align: left;
+}
+
+.module-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 320px) minmax(180px, 320px) 120px;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border-bottom: 1px solid #e1e7e1;
+}
+
+.module-controls label {
+  display: grid;
+  gap: 6px;
+  color: #526057;
+}
+
+.chart-box {
+  min-height: 330px;
+  padding: 12px;
+  border-bottom: 1px solid #e1e7e1;
+}
+
+.line-chart {
+  width: 100%;
+  height: 300px;
+  background: #fbfcfb;
+  border: 1px solid #e1e7e1;
+  border-radius: 6px;
+}
+
+.line-chart text {
+  fill: #526057;
+  font-size: 13px;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-bottom: 8px;
+  color: #4f5d54;
+  font-size: 12px;
+}
+
+.chart-legend span {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.chart-legend i {
+  width: 10px;
+  height: 10px;
+  display: inline-block;
+  border-radius: 2px;
+}
+
 .overview-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(150px, 1fr));
@@ -360,7 +490,8 @@ textarea {
 @media (max-width: 960px) {
   .control-band,
   .overview-grid,
-  .work-grid {
+  .work-grid,
+  .module-controls {
     grid-template-columns: 1fr;
   }
 

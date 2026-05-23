@@ -73,7 +73,8 @@ def import_case(request: ImportRequest) -> dict[str, object]:
         modules=sorted(result.modules_seen),
     )
     packet = build_prompt_packet(case, findings, result.snippets, kb_entries, result.warnings)
-    store.save_case(case, result.metrics, result.snippets, findings, packet)
+    module_summaries = sorted(result.module_summaries.values(), key=lambda item: str(item.get("module", "")))
+    store.save_case(case, result.metrics, module_summaries, result.snippets, findings, packet)
     return {"case": case, "warnings": result.warnings}
 
 
@@ -91,10 +92,51 @@ def get_case(case_id: str) -> dict[str, object]:
 
 
 @app.get("/api/cases/{case_id}/timeline")
-def get_timeline(case_id: str, limit: int = 5000) -> dict[str, object]:
+def get_timeline(
+    case_id: str,
+    limit: int = 5000,
+    module: Optional[str] = None,
+    metric_name: Optional[str] = None,
+    entity_name: Optional[str] = None,
+) -> dict[str, object]:
     if not store.get_case(case_id):
         raise HTTPException(status_code=404, detail="Case not found")
-    metrics = store.get_metrics(case_id, limit)
+    metrics = store.get_metrics(case_id, limit, module=module, metric_name=metric_name, entity_name=entity_name)
+    return {"metrics": metrics, "limit": limit}
+
+
+@app.get("/api/cases/{case_id}/modules")
+def get_modules(case_id: str) -> dict[str, object]:
+    if not store.get_case(case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    findings = store.get_findings(case_id)
+    finding_counts: dict[str, dict[str, int]] = {}
+    for finding in findings:
+        module = finding.get("module", "")
+        severity = finding.get("severity", "info")
+        finding_counts.setdefault(module, {"critical": 0, "warning": 0, "info": 0})
+        finding_counts[module][severity] = finding_counts[module].get(severity, 0) + 1
+    return {"modules": store.get_modules(case_id), "finding_counts": finding_counts}
+
+
+@app.get("/api/cases/{case_id}/modules/{module}/facets")
+def get_module_facets(case_id: str, module: str) -> dict[str, object]:
+    if not store.get_case(case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    return store.get_metric_facets(case_id, module)
+
+
+@app.get("/api/cases/{case_id}/modules/{module}/metrics")
+def get_module_metrics(
+    case_id: str,
+    module: str,
+    metric_name: Optional[str] = None,
+    entity_name: Optional[str] = None,
+    limit: int = 20000,
+) -> dict[str, object]:
+    if not store.get_case(case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    metrics = store.get_metrics(case_id, limit, module=module, metric_name=metric_name, entity_name=entity_name)
     return {"metrics": metrics, "limit": limit}
 
 

@@ -57,7 +57,33 @@
         </div>
       </section>
 
-      <section class="work-grid">
+      <nav class="tab-bar" id="tab-bar"></nav>
+
+      <section class="summary-view" id="summary-view">
+        <div class="panel">
+          <div class="panel-title">
+            <span class="ui-icon">S</span>
+            <h2>Gathered Tools</h2>
+          </div>
+          <div class="table-wrap">
+            <table class="module-table">
+              <thead>
+                <tr>
+                  <th>Tool</th>
+                  <th>Files</th>
+                  <th>Metrics</th>
+                  <th>Period</th>
+                  <th>Command</th>
+                  <th>Findings</th>
+                </tr>
+              </thead>
+              <tbody id="module-summary-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="work-grid hidden" id="findings-view">
         <div class="panel findings-panel">
           <div class="panel-title">
             <span class="ui-icon">!</span>
@@ -93,6 +119,45 @@
             </button>
           </div>
           <textarea id="prompt-packet" readonly></textarea>
+        </div>
+      </section>
+
+      <section class="module-view hidden" id="module-view">
+        <div class="panel">
+          <div class="panel-title">
+            <span class="ui-icon">M</span>
+            <h2 id="module-title">Module</h2>
+          </div>
+          <div class="module-controls">
+            <label>
+              Metric
+              <select id="metric-select"></select>
+            </label>
+            <label>
+              Entity
+              <select id="entity-select"></select>
+            </label>
+            <button class="primary" id="load-module-metrics">
+              <span class="ui-icon">R</span>
+              Chart
+            </button>
+          </div>
+          <div class="chart-box" id="module-chart"></div>
+          <div class="table-wrap">
+            <table class="metric-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Entity</th>
+                  <th>Metric</th>
+                  <th>Value</th>
+                  <th>Unit</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody id="module-metric-body"></tbody>
+            </table>
+          </div>
         </div>
       </section>
     </main>

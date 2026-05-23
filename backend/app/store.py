@@ -52,6 +52,19 @@ class Store:
                 );
                 create index if not exists idx_metrics_case_module on metrics(case_id, module, metric_name);
                 create index if not exists idx_metrics_case_time on metrics(case_id, timestamp);
+                create table if not exists module_summaries (
+                    case_id text not null,
+                    module text not null,
+                    file_count integer not null,
+                    metric_count integer not null,
+                    started_at text,
+                    ended_at text,
+                    commands_json text not null,
+                    versions_json text not null,
+                    sources_json text not null,
+                    path text,
+                    primary key(case_id, module)
+                );
                 create table if not exists snippets (
                     case_id text not null,
                     ref text not null,
@@ -90,6 +103,7 @@ class Store:
         self,
         case: CaseMetadata,
         metrics: list[MetricRow],
+        module_summaries: list[dict[str, Any]],
         snippets: list[EvidenceSnippet],
         findings: list[Finding],
         prompt_packet: dict[str, Any],
@@ -97,6 +111,7 @@ class Store:
         with self.connect() as conn:
             conn.execute("delete from cases where id = ?", (case.id,))
             conn.execute("delete from metrics where case_id = ?", (case.id,))
+            conn.execute("delete from module_summaries where case_id = ?", (case.id,))
             conn.execute("delete from snippets where case_id = ?", (case.id,))
             conn.execute("delete from findings where case_id = ?", (case.id,))
             conn.execute("delete from prompt_packets where case_id = ?", (case.id,))
@@ -136,6 +151,26 @@ class Store:
                         m.raw_snippet_ref,
                     )
                     for m in metrics
+                ],
+            )
+            conn.executemany(
+                """
+                insert into module_summaries values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        case.id,
+                        str(item.get("module", "")),
+                        int(item.get("file_count", 0)),
+                        int(item.get("metric_count", 0)),
+                        str(item.get("started_at", "")),
+                        str(item.get("ended_at", "")),
+                        json.dumps(item.get("commands", [])),
+                        json.dumps(item.get("versions", [])),
+                        json.dumps(item.get("sources", [])),
+                        str(item.get("path", "")),
+                    )
+                    for item in module_summaries
                 ],
             )
             conn.executemany(
@@ -180,18 +215,116 @@ class Store:
             row = conn.execute("select * from cases where id = ?", (case_id,)).fetchone()
         return case_from_row(row) if row else None
 
-    def get_metrics(self, case_id: str, limit: int = 5000) -> list[dict[str, Any]]:
+    def get_metrics(
+        self,
+        case_id: str,
+        limit: int = 5000,
+        module: Optional[str] = None,
+        metric_name: Optional[str] = None,
+        entity_name: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        where = ["case_id = ?"]
+        params: list[Any] = [case_id]
+        if module:
+            where.append("module = ?")
+            params.append(module)
+        if metric_name:
+            where.append("metric_name = ?")
+            params.append(metric_name)
+        if entity_name:
+            where.append("entity_name = ?")
+            params.append(entity_name)
+        params.append(limit)
         with self.connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 select * from metrics
-                where case_id = ?
+                where {' and '.join(where)}
                 order by timestamp, module, entity_name, metric_name
                 limit ?
                 """,
-                (case_id, limit),
+                params,
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_modules(self, case_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                select * from module_summaries
+                where case_id = ?
+                order by module
+                """,
+                (case_id,),
+            ).fetchall()
+            if rows:
+                modules = []
+                for row in rows:
+                    item = dict(row)
+                    item["commands"] = json.loads(item.pop("commands_json") or "[]")
+                    item["versions"] = json.loads(item.pop("versions_json") or "[]")
+                    item["sources"] = json.loads(item.pop("sources_json") or "[]")
+                    modules.append(item)
+                return modules
+            case = conn.execute("select modules_json from cases where id = ?", (case_id,)).fetchone()
+            if not case:
+                return []
+            metric_rows = conn.execute(
+                """
+                select module, count(*) metric_count, min(timestamp) started_at, max(timestamp) ended_at
+                from metrics
+                where case_id = ?
+                group by module
+                """,
+                (case_id,),
+            ).fetchall()
+        by_module = {row["module"]: dict(row) for row in metric_rows}
+        modules = []
+        for module in json.loads(case["modules_json"] or "[]"):
+            metrics = by_module.get(module, {})
+            modules.append(
+                {
+                    "case_id": case_id,
+                    "module": module,
+                    "file_count": 0,
+                    "metric_count": int(metrics.get("metric_count", 0) or 0),
+                    "started_at": metrics.get("started_at", ""),
+                    "ended_at": metrics.get("ended_at", ""),
+                    "commands": [],
+                    "versions": [],
+                    "sources": [],
+                    "path": "",
+                }
+            )
+        return modules
+
+    def get_metric_facets(self, case_id: str, module: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            metric_rows = conn.execute(
+                """
+                select metric_name, unit, count(*) count
+                from metrics
+                where case_id = ? and module = ?
+                group by metric_name, unit
+                order by metric_name
+                """,
+                (case_id, module),
+            ).fetchall()
+            entity_rows = conn.execute(
+                """
+                select entity_name, count(*) count
+                from metrics
+                where case_id = ? and module = ?
+                group by entity_name
+                order by entity_name
+                limit 1000
+                """,
+                (case_id, module),
+            ).fetchall()
+        return {
+            "metrics": [dict(row) for row in metric_rows],
+            "entities": [dict(row) for row in entity_rows],
+        }
 
     def get_findings(self, case_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:

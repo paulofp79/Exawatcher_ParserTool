@@ -31,10 +31,16 @@ SUPPORTED_MODULES = {
     "Diskinfo",
     "ECStat",
     "ECStatJSON",
+    "IBprocs",
+    "Lsof",
+    "NetworkAccessLayer",
+    "Numa",
+    "RDSinfo",
 }
 
 EXPECTED_MODULES = SUPPORTED_MODULES
-MAX_METRICS = 300_000
+MAX_METRICS_TOTAL = 600_000
+MAX_METRICS_PER_MODULE = 20_000
 MODULE_PRIORITY = {
     "Iostat": 0,
     "Mpstat": 1,
@@ -54,6 +60,11 @@ MODULE_PRIORITY = {
     "Diskinfo": 15,
     "ECStat": 16,
     "ECStatJSON": 17,
+    "IBprocs": 18,
+    "Lsof": 19,
+    "NetworkAccessLayer": 20,
+    "Numa": 21,
+    "RDSinfo": 22,
 }
 HEADER_RE = re.compile(r"#\s*([^:]+):\s*(.*)")
 HOST_RE = re.compile(r"\(([^)]+)\)")
@@ -70,6 +81,7 @@ class ParseResult:
     started_at: str = ""
     ended_at: str = ""
     modules_seen: set[str] = field(default_factory=set)
+    module_summaries: dict[str, dict[str, object]] = field(default_factory=dict)
     metrics: list[MetricRow] = field(default_factory=list)
     snippets: list[EvidenceSnippet] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -94,15 +106,18 @@ def parse_bundle(path: str, case_id: str) -> ParseResult:
     try:
         exa_root = find_exawatcher_root(root)
         result = ParseResult(root_path=str(exa_root))
+        inventory_modules(exa_root, result)
         files = sorted(exa_root.rglob("*.dat.xz"), key=lambda p: (MODULE_PRIORITY.get(module_from_path(p), 99), str(p)))
         for file_path in files:
             module = module_from_path(file_path)
             if module not in SUPPORTED_MODULES:
                 continue
             result.modules_seen.add(module)
-            if len(result.metrics) >= MAX_METRICS:
+            if module_cap_reached(result, module):
+                continue
+            if len(result.metrics) >= MAX_METRICS_TOTAL:
                 if not any("Metric cap reached" in warning for warning in result.warnings):
-                    result.warnings.append(f"Metric cap reached at {MAX_METRICS:,} rows; later raw rows were skipped for interactive use.")
+                    result.warnings.append(f"Metric cap reached at {MAX_METRICS_TOTAL:,} rows; later raw rows were skipped for interactive use.")
                 continue
             try:
                 parse_file(file_path, exa_root, module, case_id, result)
@@ -135,6 +150,89 @@ def module_from_path(path: Path) -> str:
     return ""
 
 
+def module_from_dir(path: Path) -> str:
+    if path.name.endswith(".ExaWatcher"):
+        return path.name.split(".", 1)[0]
+    if path.name.startswith("Charts.ExaWatcher"):
+        return "Charts"
+    return ""
+
+
+def inventory_modules(root: Path, result: ParseResult) -> None:
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        module = module_from_dir(child)
+        if not module:
+            continue
+        files = [path for path in child.rglob("*") if path.is_file()]
+        summary = ensure_module_summary(result, module)
+        summary["file_count"] = len(files)
+        summary["path"] = child.name
+        result.modules_seen.add(module)
+
+
+def ensure_module_summary(result: ParseResult, module: str) -> dict[str, object]:
+    if module not in result.module_summaries:
+        result.module_summaries[module] = {
+            "module": module,
+            "file_count": 0,
+            "metric_count": 0,
+            "started_at": "",
+            "ended_at": "",
+            "commands": [],
+            "versions": [],
+            "sources": [],
+            "path": "",
+        }
+    return result.module_summaries[module]
+
+
+def update_module_summary(
+    result: ParseResult,
+    module: str,
+    source: str,
+    header: dict[str, str],
+    timestamp: str,
+) -> None:
+    summary = ensure_module_summary(result, module)
+    sources = list(summary.get("sources", []))
+    if source not in sources:
+        sources.append(source)
+        summary["sources"] = sources[:25]
+    command = header.get("Collection Command", "")
+    if command:
+        commands = list(summary.get("commands", []))
+        if command not in commands:
+            commands.append(command)
+            summary["commands"] = commands[:10]
+    version = header.get("Version", "")
+    if version:
+        versions = list(summary.get("versions", []))
+        if version not in versions:
+            versions.append(version)
+            summary["versions"] = versions[:10]
+    if timestamp:
+        summary["started_at"] = min_non_empty(str(summary.get("started_at", "")), timestamp)
+        summary["ended_at"] = max_non_empty(str(summary.get("ended_at", "")), timestamp)
+
+
+def min_non_empty(left: str, right: str) -> str:
+    if not left:
+        return right
+    if not right:
+        return left
+    return min(left, right)
+
+
+def max_non_empty(left: str, right: str) -> str:
+    if not left:
+        return right
+    if not right:
+        return left
+    return max(left, right)
+
+
 def parse_file(path: Path, root: Path, module: str, case_id: str, result: ParseResult) -> None:
     lines = read_xz_lines(path)
     if not lines:
@@ -145,6 +243,7 @@ def parse_file(path: Path, root: Path, module: str, case_id: str, result: ParseR
     if host and not result.host:
         result.host = host
     source = str(path.relative_to(root))
+    update_module_summary(result, module, source, header, current_ts)
 
     if module == "Iostat":
         parse_iostat(lines, case_id, result.host or host, module, source, current_ts, result)
@@ -157,7 +256,7 @@ def parse_file(path: Path, root: Path, module: str, case_id: str, result: ParseR
     elif module in {"ECStatJSON"}:
         parse_ecstat_json(lines, case_id, result.host or host, module, source, current_ts, result)
     else:
-        parse_signal_module(lines, case_id, result.host or host, module, source, current_ts, result)
+        parse_generic_module(lines, case_id, result.host or host, module, source, current_ts, result)
 
 
 def read_xz_lines(path: Path) -> list[str]:
@@ -221,23 +320,40 @@ def add_metric(
     unit: str = "",
     raw: str = "",
 ) -> None:
-    if len(result.metrics) >= MAX_METRICS:
+    summary = ensure_module_summary(result, module)
+    if int(summary.get("metric_count", 0)) >= MAX_METRICS_PER_MODULE:
+        warning = f"{module} metric cap reached at {MAX_METRICS_PER_MODULE:,} rows; later rows for this tool were skipped."
+        if warning not in result.warnings:
+            result.warnings.append(warning)
+        return
+    if len(result.metrics) >= MAX_METRICS_TOTAL:
         if not any("Metric cap reached" in warning for warning in result.warnings):
-            result.warnings.append(f"Metric cap reached at {MAX_METRICS:,} rows; later raw rows were skipped for interactive use.")
+            result.warnings.append(f"Metric cap reached at {MAX_METRICS_TOTAL:,} rows; later raw rows were skipped for interactive use.")
         return
     snippet_ref = ""
     if raw:
         snippet_ref = f"s{len(result.snippets) + 1}"
         result.snippets.append(EvidenceSnippet(snippet_ref, source_file, timestamp, raw.strip()[:1200]))
+    summary["metric_count"] = int(summary.get("metric_count", 0)) + 1
+    if timestamp:
+        summary["started_at"] = min_non_empty(str(summary.get("started_at", "")), timestamp)
+        summary["ended_at"] = max_non_empty(str(summary.get("ended_at", "")), timestamp)
     result.metrics.append(
         MetricRow(case_id, host, module, source_file, timestamp, entity_type, entity_name, metric_name, value, unit, snippet_ref)
     )
+
+
+def module_cap_reached(result: ParseResult, module: str) -> bool:
+    summary = ensure_module_summary(result, module)
+    return int(summary.get("metric_count", 0)) >= MAX_METRICS_PER_MODULE
 
 
 def parse_iostat(lines: list[str], case_id: str, host: str, module: str, source: str, current_ts: str, result: ParseResult) -> None:
     current_date = ""
     header: list[str] = []
     for line in lines:
+        if module_cap_reached(result, module):
+            return
         stripped = line.strip()
         date_match = DATE_RE.match(stripped)
         if date_match:
@@ -254,7 +370,7 @@ def parse_iostat(lines: list[str], case_id: str, host: str, module: str, source:
             continue
         device = parts[0]
         values = dict(zip(header[1:], parts[1:]))
-        for metric in ("r/s", "w/s", "rMB/s", "wMB/s", "r_await", "w_await", "aqu-sz", "%util"):
+        for metric in header[1:]:
             if metric in values and is_number(values[metric]):
                 add_metric(result, case_id, host, module, source, current_ts, "device", device, metric, float(values[metric]), unit_for(metric), line)
 
@@ -263,6 +379,8 @@ def parse_mpstat(lines: list[str], case_id: str, host: str, module: str, source:
     current_date = ""
     header: list[str] = []
     for line in lines:
+        if module_cap_reached(result, module):
+            return
         stripped = line.strip()
         if "\t" in line and "_x86_64_" in line:
             bits = line.split()
@@ -286,7 +404,9 @@ def parse_mpstat(lines: list[str], case_id: str, host: str, module: str, source:
         cpu = values.get("CPU")
         if not cpu:
             continue
-        for metric in ("%usr", "%sys", "%iowait", "%irq", "%soft", "%steal", "%idle"):
+        for metric in header:
+            if metric == "CPU":
+                continue
             if metric in values and is_number(values[metric]):
                 add_metric(result, case_id, host, module, source, current_ts, "cpu", cpu, metric, float(values[metric]), "percent", line)
 
@@ -294,6 +414,8 @@ def parse_mpstat(lines: list[str], case_id: str, host: str, module: str, source:
 def parse_vmstat(lines: list[str], case_id: str, host: str, module: str, source: str, current_ts: str, result: ParseResult) -> None:
     header: list[str] = []
     for line in lines:
+        if module_cap_reached(result, module):
+            return
         stripped = line.strip()
         zzz = ZZZ_RE.search(stripped)
         if zzz:
@@ -305,7 +427,7 @@ def parse_vmstat(lines: list[str], case_id: str, host: str, module: str, source:
         if not header or len(parts) < len(header) or not all(is_number(p) for p in parts[: min(4, len(parts))]):
             continue
         values = dict(zip(header, parts))
-        for metric in ("r", "b", "swpd", "free", "si", "so", "us", "sy", "id", "wa", "st"):
+        for metric in header:
             if metric in values and is_number(values[metric]):
                 unit = "kb" if metric in {"swpd", "free"} else "count"
                 add_metric(result, case_id, host, module, source, current_ts, "system", "vmstat", metric, float(values[metric]), unit, line)
@@ -323,6 +445,8 @@ def parse_key_value_module(
     kb_unit: bool = False,
 ) -> None:
     for line in lines:
+        if module_cap_reached(result, module):
+            return
         stripped = line.strip()
         zzz = ZZZ_RE.search(stripped)
         if zzz:
@@ -354,6 +478,8 @@ def parse_ecstat_json(lines: list[str], case_id: str, host: str, module: str, so
 
 
 def walk_json_metrics(value: object, case_id: str, host: str, module: str, source: str, fallback_ts: str, result: ParseResult, prefix: str = "") -> None:
+    if module_cap_reached(result, module):
+        return
     if isinstance(value, dict):
         ts = parse_any_timestamp(str(value.get("timestampFormatted", ""))) or fallback_ts
         entity = str(value.get("name") or value.get("deviceName") or prefix or "cell")
@@ -369,6 +495,8 @@ def walk_json_metrics(value: object, case_id: str, host: str, module: str, sourc
 
 def parse_signal_module(lines: list[str], case_id: str, host: str, module: str, source: str, current_ts: str, result: ParseResult) -> None:
     for line in lines:
+        if module_cap_reached(result, module):
+            return
         stripped = line.strip()
         zzz = ZZZ_RE.search(stripped)
         if zzz:
@@ -379,6 +507,49 @@ def parse_signal_module(lines: list[str], case_id: str, host: str, module: str, 
             nums = [float(n) for n in NUMBER_RE.findall(stripped)]
             value = nums[-1] if nums else 1.0
             add_metric(result, case_id, host, module, source, current_ts, "signal", module, "signal", value, "count", line)
+
+
+def parse_generic_module(lines: list[str], case_id: str, host: str, module: str, source: str, current_ts: str, result: ParseResult) -> None:
+    parse_key_value_module(lines, case_id, host, module, source, current_ts, result, module.lower())
+    if module_cap_reached(result, module):
+        return
+    parse_generic_table_module(lines, case_id, host, module, source, current_ts, result)
+    if module_cap_reached(result, module):
+        return
+    parse_signal_module(lines, case_id, host, module, source, current_ts, result)
+
+
+def parse_generic_table_module(lines: list[str], case_id: str, host: str, module: str, source: str, current_ts: str, result: ParseResult) -> None:
+    header: list[str] = []
+    for line in lines:
+        if module_cap_reached(result, module):
+            return
+        stripped = line.strip()
+        zzz = ZZZ_RE.search(stripped)
+        if zzz:
+            current_ts = parse_any_timestamp(zzz.group(1)) or current_ts
+            continue
+        if not stripped or stripped.startswith(("#", "Linux", "zzz")):
+            continue
+        parts = stripped.split()
+        if len(parts) < 3:
+            continue
+        numeric_count = sum(1 for part in parts if is_number(part))
+        if numeric_count == 0 and any(any(ch.isalpha() for ch in part) for part in parts):
+            header = parts
+            continue
+        if not header or len(parts) < min(3, len(header)):
+            continue
+        if numeric_count == 0:
+            continue
+        entity = parts[0]
+        for index, value_text in enumerate(parts):
+            if not is_number(value_text):
+                continue
+            metric = header[index] if index < len(header) else f"col_{index}"
+            if metric == entity:
+                continue
+            add_metric(result, case_id, host, module, source, current_ts, module.lower(), entity, metric, float(value_text), unit_for(metric), line)
 
 
 def is_number(text: str) -> bool:

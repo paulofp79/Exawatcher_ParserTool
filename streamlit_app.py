@@ -18,6 +18,48 @@ DATE_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2}:\d{2}\s+[AP]M)")
 ZZZ_RE = re.compile(r"zzz\s+<([^>]+)>")
 NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 SIGNAL_WORDS = ("error", "fail", "offline", "drop", "dropped", "retrans", "timeout", "latency", "corrupt")
+CELL_SQLSTAT_DESCRIPTIONS = {
+    "CDBID": "Container database ID running the SQL query",
+    "DBID": "Database ID running the SQL query",
+    "SQLID": "SQL ID of the SQL query",
+    "Duration Seconds": "Aggregated run time across all runs, converted to seconds",
+    "Memory Bytes": "Amount of offload server memory used by the SQL statement",
+    "%CPU": "Percentage of elapsed time spent on CPU; can exceed 100% for multiple threads",
+    "Requested Bytes": "Bytes eligible for smart scan",
+    "Returned Bytes": "Bytes returned to the database by smart scan",
+    "%Storage Index": "Percentage of requested bytes saved by storage index",
+    "%XRMEM Columnar": "Percentage of requested bytes read from XRMEM columnar cache",
+    "%Flash Columnar": "Percentage of requested bytes read from flash columnar cache",
+    "%Flash Regular": "Percentage of requested bytes read from flash cache, non-columnar",
+    "%Disk": "Percentage of requested bytes read from disk",
+    "%Passthru": "Percentage of requested bytes returned directly to the database with no offloading",
+    "XRMEM Columnar Bytes": "Physical bytes read from XRMEM columnar cache",
+    "Flash Columnar Bytes": "Physical bytes read from flash columnar cache",
+    "Flash Regular Bytes": "Physical bytes read from flash cache, non-columnar",
+    "Disk Bytes": "Physical bytes read from disk",
+    "Columnar Saved Bytes": "Physical bytes saved by flash columnar cache and XRMEM columnar cache",
+    "Storage Index Saved Bytes": "Requested Bytes saved by storage index",
+    "Passthru Bytes": "Requested bytes returned directly to the database with no offloading",
+    "IOs": "Smart IOs completed since start of query",
+    "DBNAME": "Database name running the SQL query",
+}
+CELL_SQLSTAT_PERCENT_FIELDS = [
+    "%Storage Index",
+    "%XRMEM Columnar",
+    "%Flash Columnar",
+    "%Flash Regular",
+    "%Disk",
+    "%Passthru",
+]
+CELL_SQLSTAT_BYTE_FIELDS = [
+    "XRMEM Columnar Bytes",
+    "Flash Columnar Bytes",
+    "Flash Regular Bytes",
+    "Disk Bytes",
+    "Columnar Saved Bytes",
+    "Storage Index Saved Bytes",
+    "Passthru Bytes",
+]
 
 
 @dataclass
@@ -186,6 +228,10 @@ def render_tool_tab(root: Path, summary: ToolSummary, max_rows: int) -> None:
         render_raw_preview(root, summary)
         return
 
+    if summary.tool == "CellSqlStat":
+        render_cellsqlstat(df)
+        return
+
     metric_names = sorted(df["metric"].dropna().unique().tolist())
     entity_names = sorted(df["entity"].dropna().unique().tolist())
 
@@ -257,6 +303,8 @@ def parse_tool(root_text: str, relative_tool_path: str, max_rows: int) -> pd.Dat
             rows.extend(parse_key_values(text_rows, file_path, root, module, max_rows - len(rows)))
         elif module == "ECStatJSON":
             rows.extend(parse_json_metrics(text_rows, file_path, root, module, max_rows - len(rows)))
+        elif module == "CellSqlStat":
+            rows.extend(parse_cellsqlstat(text_rows, file_path, root, max_rows - len(rows)))
         else:
             rows.extend(parse_key_values(text_rows, file_path, root, module, max_rows - len(rows)))
             if len(rows) < max_rows:
@@ -267,6 +315,220 @@ def parse_tool(root_text: str, relative_tool_path: str, max_rows: int) -> pd.Dat
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df = df.dropna(subset=["timestamp"])
     return df.sort_values(["timestamp", "entity", "metric"])
+
+
+def render_cellsqlstat(df: pd.DataFrame) -> None:
+    with st.expander("CellSqlStat column legend", expanded=False):
+        legend = [{"Column": key, "Description": value} for key, value in CELL_SQLSTAT_DESCRIPTIONS.items()]
+        st.dataframe(pd.DataFrame(legend), use_container_width=True, hide_index=True)
+
+    metric_names = sorted(df["metric"].dropna().unique().tolist())
+    if not metric_names:
+        st.info("No CellSqlStat numeric metrics were parsed.")
+        return
+    sqlids = sorted(df["sqlid"].dropna().unique().tolist()) if "sqlid" in df.columns else sorted(df["entity"].dropna().unique().tolist())
+    default_metric = "Memory Bytes" if "Memory Bytes" in metric_names else metric_names[0]
+    c1, c2 = st.columns([1, 2])
+    metric = c1.selectbox("CellSqlStat metric", metric_names, index=metric_names.index(default_metric), key="metric_CellSqlStat_special")
+    top_sqlids = (
+        df[df["metric"] == metric]
+        .sort_values("value", ascending=False)["entity"]
+        .drop_duplicates()
+        .head(8)
+        .tolist()
+    )
+    selected_sqlids = c2.multiselect("SQL IDs", sqlids, default=top_sqlids, key="entity_CellSqlStat_special")
+
+    chart_df = df[df["metric"] == metric].copy()
+    if selected_sqlids:
+        chart_df = chart_df[chart_df["entity"].isin(selected_sqlids)]
+    if chart_df.empty:
+        st.info("No CellSqlStat rows match the current selection.")
+    else:
+        pivot = chart_df.pivot_table(index="timestamp", columns="entity", values="value", aggfunc="max").sort_index()
+        st.line_chart(pivot, use_container_width=True)
+
+    detail = pivot_cellsqlstat(df)
+    sort_metric = metric if metric in detail.columns else "Memory Bytes"
+    if sort_metric in detail.columns:
+        detail = detail.sort_values(sort_metric, ascending=False)
+    preferred = [
+        "timestamp",
+        "sqlid",
+        "dbname",
+        "cdbid",
+        "dbid",
+        "Duration Seconds",
+        "Memory Bytes",
+        "%CPU",
+        "Requested Bytes",
+        "Returned Bytes",
+        "IOs",
+        "source",
+    ]
+    visible = [col for col in preferred if col in detail.columns]
+    rest = [col for col in detail.columns if col not in visible]
+    st.dataframe(detail[visible + rest].head(1000), use_container_width=True, hide_index=True)
+
+
+def pivot_cellsqlstat(df: pd.DataFrame) -> pd.DataFrame:
+    index_cols = ["timestamp", "entity", "source"]
+    for col in ("sqlid", "dbname", "cdbid", "dbid"):
+        if col in df.columns:
+            index_cols.append(col)
+    detail = df.pivot_table(index=index_cols, columns="metric", values="value", aggfunc="max").reset_index()
+    detail.columns.name = None
+    return detail
+
+
+def parse_cellsqlstat(lines: List[str], path: Path, root: Path, limit: int) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    timestamp = timestamp_from_filename(path.name)
+    section = ""
+    idx = 0
+    while idx < len(lines) and len(rows) < limit:
+        stripped = lines[idx].strip()
+        if stripped.startswith("Current Time:"):
+            timestamp = parse_any_timestamp(stripped.split(":", 1)[1].strip()) or timestamp
+            idx += 1
+            continue
+        if stripped.startswith("Top SQL by"):
+            section = stripped
+            idx += 1
+            continue
+        tokens = stripped.split()
+        if is_cellsqlstat_data_row(tokens):
+            parsed = parse_cellsqlstat_tokens(tokens)
+            if parsed:
+                if idx + 1 < len(lines):
+                    continuation = lines[idx + 1].strip().split()
+                    if continuation and not is_cellsqlstat_data_row(continuation):
+                        cpu = parse_plain_number(continuation[0])
+                        if cpu is not None:
+                            parsed["%CPU"] = cpu
+                        if continuation[-1].endswith("/s"):
+                            rate = parse_plain_number(continuation[-1].replace("/s", ""))
+                            if rate is not None:
+                                parsed["IOs/s"] = rate
+                for metric, value in parsed.items():
+                    if metric in {"CDBID", "DBID", "SQLID", "DBNAME", "Duration", "section"}:
+                        continue
+                    if value is None:
+                        continue
+                    unit = cellsqlstat_unit(metric)
+                    item = row(timestamp, str(parsed["SQLID"]), metric, float(value), unit, path, root)
+                    item.update(
+                        {
+                            "sqlid": str(parsed["SQLID"]),
+                            "cdbid": str(parsed["CDBID"]),
+                            "dbid": str(parsed["DBID"]),
+                            "dbname": str(parsed["DBNAME"]),
+                            "section": section,
+                            "duration": str(parsed.get("Duration", "")),
+                        }
+                    )
+                    rows.append(item)
+                    if len(rows) >= limit:
+                        break
+            idx += 2
+            continue
+        idx += 1
+    return rows
+
+
+def is_cellsqlstat_data_row(tokens: List[str]) -> bool:
+    if len(tokens) < 7:
+        return False
+    return tokens[0].isdigit() and tokens[1].isdigit() and re.match(r"^[0-9a-zA-Z]{10,}$", tokens[2]) is not None and ":" in tokens[3]
+
+
+def parse_cellsqlstat_tokens(tokens: List[str]) -> Optional[Dict[str, Any]]:
+    if len(tokens) < 8:
+        return None
+    parsed: Dict[str, Any] = {
+        "CDBID": tokens[0],
+        "DBID": tokens[1],
+        "SQLID": tokens[2],
+        "Duration": tokens[3],
+        "Duration Seconds": parse_duration_seconds(tokens[3]),
+        "Memory Bytes": parse_human_bytes(tokens[4]),
+        "DBNAME": tokens[-1],
+        "IOs": parse_plain_number(tokens[-2]),
+    }
+    middle = tokens[5:-2]
+    if middle:
+        parsed["Requested Bytes"] = parse_human_bytes(middle[0])
+    if len(middle) > 1:
+        parsed["Returned Bytes"] = parse_human_bytes(middle[1])
+    remaining = middle[2:]
+    if len(remaining) >= len(CELL_SQLSTAT_BYTE_FIELDS):
+        byte_tokens = remaining[-len(CELL_SQLSTAT_BYTE_FIELDS) :]
+        percent_tokens = remaining[: -len(CELL_SQLSTAT_BYTE_FIELDS)]
+    else:
+        byte_tokens = remaining
+        percent_tokens = []
+    for field, value_text in zip(CELL_SQLSTAT_PERCENT_FIELDS, percent_tokens):
+        parsed[field] = parse_plain_number(value_text)
+    for field, value_text in zip(CELL_SQLSTAT_BYTE_FIELDS, byte_tokens):
+        parsed[field] = parse_human_bytes(value_text)
+    return parsed
+
+
+def parse_duration_seconds(value: str) -> Optional[float]:
+    try:
+        parts = value.split(":")
+        if len(parts) != 3:
+            return None
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+        return hours * 3600 + minutes * 60 + seconds
+    except Exception:
+        return None
+
+
+def parse_human_bytes(value: str) -> Optional[float]:
+    number = parse_plain_number(value)
+    if number is None:
+        return None
+    suffix = value.strip().replace(",", "")[-1:].upper()
+    multiplier = {
+        "K": 1024,
+        "M": 1024**2,
+        "G": 1024**3,
+        "T": 1024**4,
+        "P": 1024**5,
+    }.get(suffix, 1)
+    return number * multiplier
+
+
+def parse_plain_number(value: str) -> Optional[float]:
+    cleaned = value.strip().replace(",", "")
+    if not cleaned or cleaned == "-":
+        return None
+    if cleaned.endswith("/s"):
+        cleaned = cleaned[:-2]
+    match = NUMBER_RE.search(cleaned)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except Exception:
+        return None
+
+
+def cellsqlstat_unit(metric: str) -> str:
+    if metric.startswith("%"):
+        return "percent"
+    if metric.endswith("Bytes"):
+        return "bytes"
+    if metric == "Duration Seconds":
+        return "seconds"
+    if metric == "IOs/s":
+        return "per_sec"
+    if metric == "IOs":
+        return "count"
+    return ""
 
 
 def read_header(path: Path) -> Dict[str, str]:
@@ -475,6 +737,8 @@ def detect_numeric_problems(module: str, df: pd.DataFrame) -> List[Dict[str, Any
     if df.empty:
         return []
     problems: List[Dict[str, Any]] = []
+    if module == "CellSqlStat":
+        return detect_cellsqlstat_problems(df)
     checks = [
         ("%util", 90, "critical", "High device utilization"),
         ("%util", 80, "warning", "Elevated device utilization"),
@@ -529,6 +793,36 @@ def detect_numeric_problems(module: str, df: pd.DataFrame) -> List[Dict[str, Any
                         "source": worst["source"],
                     }
                 )
+    return problems
+
+
+def detect_cellsqlstat_problems(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    checks = [
+        ("Memory Bytes", 8 * 1024**3, "critical", "Very high offload memory by SQL"),
+        ("Memory Bytes", 1 * 1024**3, "warning", "High offload memory by SQL"),
+        ("%Passthru", 50, "warning", "High passthru percentage"),
+        ("%Disk", 80, "warning", "Disk-heavy smart scan"),
+        ("Passthru Bytes", 1 * 1024**4, "warning", "Large passthru volume"),
+    ]
+    problems: List[Dict[str, Any]] = []
+    for metric, threshold, severity, title in checks:
+        subset = df[(df["metric"] == metric) & (df["value"] > threshold)]
+        if subset.empty:
+            continue
+        worst = subset.sort_values("value", ascending=False).iloc[0]
+        problems.append(
+            {
+                "severity": severity,
+                "tool": "CellSqlStat",
+                "title": title,
+                "time": str(worst["timestamp"]),
+                "entity": worst.get("sqlid", worst["entity"]),
+                "metric": metric,
+                "value": round(float(worst["value"]), 3),
+                "source": worst["source"],
+                "detail": worst.get("dbname", ""),
+            }
+        )
     return problems
 
 

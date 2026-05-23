@@ -27,7 +27,6 @@ SUPPORTED_MODULES = {
     "CellSrvStat",
     "CellSqlStat",
     "Cellmem",
-    "Celldiskmd",
     "Diskinfo",
     "ECStat",
     "ECStatJSON",
@@ -38,6 +37,7 @@ SUPPORTED_MODULES = {
     "RDSinfo",
 }
 
+EXCLUDED_MODULES = {"Celldiskmd"}
 EXPECTED_MODULES = SUPPORTED_MODULES
 MAX_METRICS_TOTAL = 600_000
 MAX_METRICS_PER_MODULE = 20_000
@@ -56,15 +56,14 @@ MODULE_PRIORITY = {
     "CellSrvStat": 11,
     "CellSqlStat": 12,
     "Cellmem": 13,
-    "Celldiskmd": 14,
-    "Diskinfo": 15,
-    "ECStat": 16,
-    "ECStatJSON": 17,
-    "IBprocs": 18,
-    "Lsof": 19,
-    "NetworkAccessLayer": 20,
-    "Numa": 21,
-    "RDSinfo": 22,
+    "Diskinfo": 14,
+    "ECStat": 15,
+    "ECStatJSON": 16,
+    "IBprocs": 17,
+    "Lsof": 18,
+    "NetworkAccessLayer": 19,
+    "Numa": 20,
+    "RDSinfo": 21,
 }
 HEADER_RE = re.compile(r"#\s*([^:]+):\s*(.*)")
 HOST_RE = re.compile(r"\(([^)]+)\)")
@@ -110,6 +109,8 @@ def parse_bundle(path: str, case_id: str) -> ParseResult:
         files = sorted(exa_root.rglob("*.dat.xz"), key=lambda p: (MODULE_PRIORITY.get(module_from_path(p), 99), str(p)))
         for file_path in files:
             module = module_from_path(file_path)
+            if module in EXCLUDED_MODULES:
+                continue
             if module not in SUPPORTED_MODULES:
                 continue
             result.modules_seen.add(module)
@@ -164,6 +165,8 @@ def inventory_modules(root: Path, result: ParseResult) -> None:
             continue
         module = module_from_dir(child)
         if not module:
+            continue
+        if module in EXCLUDED_MODULES:
             continue
         files = [path for path in child.rglob("*") if path.is_file()]
         summary = ensure_module_summary(result, module)

@@ -18,6 +18,7 @@ DATE_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2}:\d{2}\s+[AP]M)")
 ZZZ_RE = re.compile(r"zzz\s+<([^>]+)>")
 NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 SIGNAL_WORDS = ("error", "fail", "offline", "drop", "dropped", "retrans", "timeout", "latency", "corrupt")
+EXCLUDED_TOOLS = {"Celldiskmd"}
 CELL_SQLSTAT_DESCRIPTIONS = {
     "CDBID": "Container database ID running the SQL query",
     "DBID": "Database ID running the SQL query",
@@ -157,6 +158,8 @@ def scan_tools(root_text: str) -> List[ToolSummary]:
         if not child.is_dir():
             continue
         if not (child.name.endswith(".ExaWatcher") or child.name.startswith("Charts.ExaWatcher")):
+            continue
+        if tool_name(child) in EXCLUDED_TOOLS:
             continue
         files = sorted(path for path in child.rglob("*") if path.is_file())
         xz_files = [path for path in files if path.name.endswith(".xz")]

@@ -17,6 +17,7 @@ HEADER_RE = re.compile(r"#\s*([^:]+):\s*(.*)")
 DATE_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2}:\d{2}\s+[AP]M)")
 ZZZ_RE = re.compile(r"zzz\s+<([^>]+)>")
 NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
+CELLMEM_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)")
 SIGNAL_WORDS = ("error", "fail", "offline", "drop", "dropped", "retrans", "timeout", "latency", "corrupt")
 EXCLUDED_TOOLS = {"Celldiskmd"}
 CELL_SQLSTAT_DESCRIPTIONS = {
@@ -66,6 +67,29 @@ CELL_SRVSTAT_DESCRIPTIONS = {
     "Memory related stats": "SGA/PGA/cellsrv/kernel memory allocation and top memory consumers.",
     "Execution related stats": "CellSrv job execution, thread waits, buffer pressure, predicate/offload scheduling, and CPU scheduling ratios.",
 }
+CELL_MEM_FIELDS = [
+    ("%OS_AVAIL", "percent", "OS availability", "Percentage of operating system memory available."),
+    ("OS_AVAIL", "GB", "OS availability", "Operating system memory available."),
+    ("OS_TOT", "GB", "OS availability", "Total operating system memory."),
+    ("OS_USR", "GB", "OS usage", "Operating system memory used by user space."),
+    ("OS_KNL", "GB", "OS usage", "Operating system memory used by kernel space."),
+    ("SLAB", "GB", "Kernel breakdown", "Kernel slab memory."),
+    ("RDS", "GB", "Kernel breakdown", "RDS memory."),
+    ("RDMA", "GB", "Kernel breakdown", "RDMA memory."),
+    ("PGST", "GB", "Kernel breakdown", "Page store memory."),
+    ("OFLPTE", "GB", "Kernel breakdown", "Offload page table entry memory."),
+    ("OTHER", "GB", "Kernel breakdown", "Other kernel memory."),
+    ("%CL_AVAIL", "percent", "Cell availability", "Percentage of cell memory available."),
+    ("CL_AVAIL", "GB", "Cell availability", "Cell memory available."),
+    ("CL_MAX", "GB", "Cell limits", "Maximum cell memory after reserved memory."),
+    ("CL_MAX_OS_TOT", "GB", "Cell limits", "OS total memory used in the cell max formula."),
+    ("CL_RVD", "GB", "Cell limits", "Cell reserved memory."),
+    ("CL_USD", "GB", "Cell usage", "Cell memory used."),
+    ("CL_C", "GB", "Cell usage", "Cell memory used by C component."),
+    ("CL_O", "GB", "Cell usage", "Cell memory used by O component."),
+    ("CL_K", "GB", "Cell usage", "Cell memory used by K component."),
+    ("OTHER_SERVICES", "GB", "Cell usage", "Memory used by other services."),
+]
 
 
 @dataclass
@@ -242,6 +266,9 @@ def render_tool_tab(root: Path, summary: ToolSummary, max_rows: int) -> None:
     if summary.tool == "CellSrvStat":
         render_cellsrvstat(df)
         return
+    if summary.tool == "Cellmem":
+        render_cellmem(df)
+        return
 
     metric_names = sorted(df["metric"].dropna().unique().tolist())
     entity_names = sorted(df["entity"].dropna().unique().tolist())
@@ -312,6 +339,8 @@ def parse_tool(root_text: str, relative_tool_path: str, max_rows: int) -> pd.Dat
             rows.extend(parse_vmstat(text_rows, file_path, root, max_rows - len(rows)))
         elif module == "Meminfo":
             rows.extend(parse_key_values(text_rows, file_path, root, module, max_rows - len(rows)))
+        elif module == "Cellmem":
+            rows.extend(parse_cellmem(text_rows, file_path, root, max_rows - len(rows)))
         elif module == "ECStatJSON":
             rows.extend(parse_json_metrics(text_rows, file_path, root, module, max_rows - len(rows)))
         elif module == "CellSqlStat":
@@ -453,6 +482,122 @@ def pick_default_cellsrv_metric(metric_names: List[str]) -> str:
         if metric in metric_names:
             return metric
     return metric_names[0]
+
+
+def render_cellmem(df: pd.DataFrame) -> None:
+    with st.expander("Cellmem column legend", expanded=True):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {"Metric": metric, "Unit": unit, "Group": group, "Description": description}
+                    for metric, unit, group, description in CELL_MEM_FIELDS
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    groups = sorted(df["group"].dropna().unique().tolist()) if "group" in df.columns else []
+    group = st.selectbox("Memory group", ["All"] + groups, key="group_Cellmem")
+    view = df.copy()
+    if group != "All":
+        view = view[view["group"] == group]
+    if view.empty:
+        st.info("No Cellmem rows match this memory group.")
+        return
+
+    metric_names = sorted(view["metric"].dropna().unique().tolist())
+    default_metric = pick_default_cellmem_metric(metric_names)
+    metric = st.selectbox("Cellmem metric", metric_names, index=metric_names.index(default_metric), key="metric_Cellmem_special")
+    chart_df = view[view["metric"] == metric].copy()
+    if chart_df.empty:
+        st.info("No Cellmem rows match the current metric.")
+    else:
+        pivot = chart_df.pivot_table(index="timestamp", columns="entity", values="value", aggfunc="max").sort_index()
+        st.line_chart(pivot, use_container_width=True)
+
+    detail = pivot_cellmem(df)
+    preferred = [
+        "timestamp",
+        "%OS_AVAIL",
+        "OS_AVAIL",
+        "OS_TOT",
+        "OS_USR",
+        "OS_KNL",
+        "%CL_AVAIL",
+        "CL_AVAIL",
+        "CL_MAX",
+        "CL_RVD",
+        "CL_USD",
+        "CL_C",
+        "CL_O",
+        "CL_K",
+        "OTHER_SERVICES",
+        "source",
+    ]
+    visible = [col for col in preferred if col in detail.columns]
+    rest = [col for col in detail.columns if col not in visible]
+    st.dataframe(detail[visible + rest].head(1500), use_container_width=True, hide_index=True)
+
+
+def pick_default_cellmem_metric(metric_names: List[str]) -> str:
+    preferred = ["%OS_AVAIL", "OS_AVAIL", "%CL_AVAIL", "CL_AVAIL", "CL_USD", "OS_USR", "OS_KNL"]
+    for metric in preferred:
+        if metric in metric_names:
+            return metric
+    return metric_names[0]
+
+
+def pivot_cellmem(df: pd.DataFrame) -> pd.DataFrame:
+    detail = df.pivot_table(index=["timestamp", "entity", "source"], columns="metric", values="value", aggfunc="max").reset_index()
+    detail.columns.name = None
+    return detail
+
+
+def parse_cellmem(lines: List[str], path: Path, root: Path, limit: int) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    fallback_timestamp = timestamp_from_filename(path.name)
+    fields = CELL_MEM_FIELDS
+    for line in lines:
+        if len(rows) >= limit:
+            break
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        zzz = ZZZ_RE.search(stripped)
+        if zzz:
+            fallback_timestamp = parse_any_timestamp(zzz.group(1)) or fallback_timestamp
+            continue
+        if stripped.startswith("TIMESTAMP"):
+            continue
+        tokens = stripped.split()
+        if not tokens or not re.match(r"^\d{4}-\d{2}-\d{2}T", tokens[0]):
+            continue
+        timestamp = tokens[0] or fallback_timestamp
+        values = [value for token in tokens[1:] if (value := parse_cellmem_number(token)) is not None]
+        for idx, value in enumerate(values):
+            if len(rows) >= limit:
+                break
+            if idx < len(fields):
+                metric, unit, group, description = fields[idx]
+            else:
+                metric, unit, group, description = f"extra_{idx + 1}", "", "Extra", "Additional numeric value not mapped in the V1 legend."
+            item = row(timestamp, "cellmem", metric, value, unit, path, root)
+            item.update({"group": group, "description": description})
+            rows.append(item)
+    return rows[:limit]
+
+
+def parse_cellmem_number(token: str) -> Optional[float]:
+    cleaned = token.strip().strip("()").replace(",", "")
+    if cleaned in {"", "=", "-", "=(", ")"}:
+        return None
+    if CELLMEM_NUMBER_RE.fullmatch(cleaned) is None:
+        return None
+    try:
+        return float(cleaned)
+    except Exception:
+        return None
 
 
 def parse_cellsrvstat(lines: List[str], path: Path, root: Path, limit: int) -> List[Dict[str, Any]]:
@@ -958,6 +1103,8 @@ def detect_numeric_problems(module: str, df: pd.DataFrame) -> List[Dict[str, Any
         return detect_cellsqlstat_problems(df)
     if module == "CellSrvStat":
         return detect_cellsrvstat_problems(df)
+    if module == "Cellmem":
+        return detect_cellmem_problems(df)
     checks = [
         ("%util", 90, "critical", "High device utilization"),
         ("%util", 80, "warning", "Elevated device utilization"),
@@ -1047,6 +1194,39 @@ def detect_cellsrvstat_problems(df: pd.DataFrame) -> List[Dict[str, Any]]:
                 "value": round(float(worst["value"]), 3),
                 "source": worst["source"],
                 "detail": f"{worst.get('section', '')} / {worst.get('group', '')}",
+            }
+        )
+    return problems
+
+
+def detect_cellmem_problems(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    checks = [
+        ("%OS_AVAIL", 5, "critical", "Very low OS memory available"),
+        ("%OS_AVAIL", 10, "warning", "Low OS memory available"),
+        ("%CL_AVAIL", 5, "critical", "Very low cell memory available"),
+        ("%CL_AVAIL", 10, "warning", "Low cell memory available"),
+        ("OS_AVAIL", 20, "critical", "Very low OS available memory"),
+        ("OS_AVAIL", 50, "warning", "Low OS available memory"),
+        ("CL_AVAIL", 50, "critical", "Very low cell available memory"),
+        ("CL_AVAIL", 100, "warning", "Low cell available memory"),
+    ]
+    problems: List[Dict[str, Any]] = []
+    for metric, threshold, severity, title in checks:
+        subset = df[(df["metric"] == metric) & (df["value"] < threshold)]
+        if subset.empty:
+            continue
+        worst = subset.sort_values("value").iloc[0]
+        problems.append(
+            {
+                "severity": severity,
+                "tool": "Cellmem",
+                "title": title,
+                "time": str(worst["timestamp"]),
+                "entity": worst["entity"],
+                "metric": metric,
+                "value": round(float(worst["value"]), 3),
+                "source": worst["source"],
+                "detail": f"threshold < {threshold} {worst.get('unit', '')}".strip(),
             }
         )
     return problems

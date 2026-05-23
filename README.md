@@ -4,7 +4,18 @@ Local web workbench for parsing Exadata Storage Cell ExaWatcher bundles, detecti
 
 ## Quick Start
 
-Backend:
+Recommended Streamlit workbench:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8099
+```
+
+Open `http://<server>:8099`, enter the ExaWatcher directory path, and click **Scan / Refresh**.
+
+Legacy FastAPI backend:
 
 ```bash
 python3 -m venv .venv
@@ -37,4 +48,3 @@ Sample bundle used during development:
 - `backend/app/main.py` exposes the FastAPI API.
 - `frontend/src/` implements the local diagnostic dashboard.
 - `kb/storage_cell.yml` is the editable seeded knowledge base.
-

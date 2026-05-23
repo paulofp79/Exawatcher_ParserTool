@@ -6,6 +6,8 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .kb import load_knowledge_base
@@ -17,6 +19,7 @@ from .store import Store, build_prompt_packet
 ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = ROOT / "data"
 KB_PATH = ROOT / "kb" / "storage_cell.yml"
+FRONTEND_DIR = ROOT / "frontend"
 
 app = FastAPI(title="ExaWatcher Storage Cell Troubleshooting Workbench")
 app.add_middleware(
@@ -27,11 +30,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 store = Store(DATA_DIR / "exawatcher.db", DATA_DIR / "cases")
+app.mount("/src", StaticFiles(directory=FRONTEND_DIR / "src"), name="frontend-src")
 
 
 class ImportRequest(BaseModel):
     path: str
     name: Optional[str] = None
+
+
+@app.get("/")
+def index() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 
 @app.get("/api/health")

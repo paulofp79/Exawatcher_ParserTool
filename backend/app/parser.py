@@ -28,7 +28,6 @@ SUPPORTED_MODULES = {
     "CellSqlStat",
     "Cellmem",
     "Diskinfo",
-    "ECStat",
     "ECStatJSON",
     "IBprocs",
     "Lsof",
@@ -37,7 +36,7 @@ SUPPORTED_MODULES = {
     "RDSinfo",
 }
 
-EXCLUDED_MODULES = {"Celldiskmd"}
+EXCLUDED_MODULES = {"Celldiskmd", "ECStat"}
 EXPECTED_MODULES = SUPPORTED_MODULES
 MAX_METRICS_TOTAL = 600_000
 MAX_METRICS_PER_MODULE = 20_000
@@ -57,13 +56,12 @@ MODULE_PRIORITY = {
     "CellSqlStat": 12,
     "Cellmem": 13,
     "Diskinfo": 14,
-    "ECStat": 15,
-    "ECStatJSON": 16,
-    "IBprocs": 17,
-    "Lsof": 18,
-    "NetworkAccessLayer": 19,
-    "Numa": 20,
-    "RDSinfo": 21,
+    "ECStatJSON": 15,
+    "IBprocs": 16,
+    "Lsof": 17,
+    "NetworkAccessLayer": 18,
+    "Numa": 19,
+    "RDSinfo": 20,
 }
 HEADER_RE = re.compile(r"#\s*([^:]+):\s*(.*)")
 HOST_RE = re.compile(r"\(([^)]+)\)")

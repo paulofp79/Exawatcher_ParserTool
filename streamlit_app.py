@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 DEFAULT_PATH = "/root/PP/ExaWatcher_gru126171exdcl18.oraclecloud.internal_2026-05-13_19_00_00_3h00m00s"
@@ -19,7 +20,26 @@ ZZZ_RE = re.compile(r"zzz\s+<([^>]+)>")
 NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 CELLMEM_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)")
 SIGNAL_WORDS = ("error", "fail", "offline", "drop", "dropped", "retrans", "timeout", "latency", "corrupt")
-EXCLUDED_TOOLS = {"Celldiskmd"}
+EXCLUDED_TOOLS = {"Celldiskmd", "ECStat"}
+DISKINFO_FIELDS = [
+    ("reads_completed", "count"),
+    ("reads_merged", "count"),
+    ("sectors_read", "sectors"),
+    ("time_reading_ms", "ms"),
+    ("writes_completed", "count"),
+    ("writes_merged", "count"),
+    ("sectors_written", "sectors"),
+    ("time_writing_ms", "ms"),
+    ("ios_in_progress", "count"),
+    ("time_doing_io_ms", "ms"),
+    ("weighted_time_doing_io_ms", "ms"),
+    ("discards_completed", "count"),
+    ("discards_merged", "count"),
+    ("sectors_discarded", "sectors"),
+    ("time_discarding_ms", "ms"),
+    ("flushes_completed", "count"),
+    ("time_flushing_ms", "ms"),
+]
 CELL_SQLSTAT_DESCRIPTIONS = {
     "CDBID": "Container database ID running the SQL query",
     "DBID": "Database ID running the SQL query",
@@ -234,6 +254,61 @@ def render_summary(summaries: List[ToolSummary]) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+def render_charts_tab(root: Path, summary: ToolSummary) -> None:
+    chart_root = root / summary.path
+    html_files = sorted(path for path in chart_root.rglob("*.html") if path.is_file())
+    if not html_files:
+        st.info("No HTML chart files were found in this Charts directory.")
+        return
+
+    choices = [
+        path
+        for path in html_files
+        if not path.name.endswith("_menu.html") and path.name != "index.html"
+    ] or html_files
+    labels = {chart_label(path): path for path in choices}
+    default_label = next((label for label in labels if "IO Summary" in label), next(iter(labels)))
+    selected = st.selectbox("ExaWatcher chart", list(labels), index=list(labels).index(default_label), key="chart_file")
+    selected_path = labels[selected]
+
+    st.caption(str(selected_path.relative_to(root)))
+    html = selected_path.read_text(encoding="utf-8", errors="replace")
+    components.html(html, height=900, scrolling=True)
+
+    with st.expander("Chart files", expanded=False):
+        rows = [
+            {
+                "Chart": chart_label(path),
+                "File": str(path.relative_to(root)),
+                "Size KB": round(path.stat().st_size / 1024, 1),
+            }
+            for path in html_files
+        ]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def chart_label(path: Path) -> str:
+    name = path.stem
+    if name == "index":
+        return "Frameset Index"
+    if name.endswith("_menu"):
+        return "Menu"
+    suffix_map = {
+        "cellsrv": "CellSrv",
+        "cpu": "CPU",
+        "inc": "Incidents",
+        "iodetail": "IO Detail",
+        "iosummary": "IO Summary",
+        "meminfo": "Memory",
+        "mp": "MPStat",
+        "roce": "RoCE",
+    }
+    suffix = name.rsplit("_", 1)[-1]
+    if suffix in suffix_map:
+        return suffix_map[suffix]
+    return "Overview"
+
+
 def render_tool_tab(root: Path, summary: ToolSummary, max_rows: int) -> None:
     st.subheader(summary.tool)
     st.write(f"**Files:** {summary.file_count:,}  **Compressed:** {summary.xz_count:,}  **Period:** {summary.first_time or '?'} to {summary.last_time or '?'}")
@@ -242,6 +317,10 @@ def render_tool_tab(root: Path, summary: ToolSummary, max_rows: int) -> None:
 
     with st.expander("Files in this tool", expanded=False):
         st.dataframe(pd.DataFrame({"file": summary.files}), use_container_width=True, hide_index=True)
+
+    if summary.tool == "Charts":
+        render_charts_tab(root, summary)
+        return
 
     if summary.xz_count == 0:
         st.info("No compressed .xz data files found for this tool.")
@@ -268,6 +347,12 @@ def render_tool_tab(root: Path, summary: ToolSummary, max_rows: int) -> None:
         return
     if summary.tool == "Cellmem":
         render_cellmem(df)
+        return
+    if summary.tool == "ECStatJSON":
+        render_ecstatjson(df)
+        return
+    if summary.tool == "Diskinfo":
+        render_diskinfo(df)
         return
 
     metric_names = sorted(df["metric"].dropna().unique().tolist())
@@ -341,8 +426,10 @@ def parse_tool(root_text: str, relative_tool_path: str, max_rows: int) -> pd.Dat
             rows.extend(parse_key_values(text_rows, file_path, root, module, max_rows - len(rows)))
         elif module == "Cellmem":
             rows.extend(parse_cellmem(text_rows, file_path, root, max_rows - len(rows)))
+        elif module == "Diskinfo":
+            rows.extend(parse_diskinfo(text_rows, file_path, root, max_rows - len(rows)))
         elif module == "ECStatJSON":
-            rows.extend(parse_json_metrics(text_rows, file_path, root, module, max_rows - len(rows)))
+            rows.extend(parse_ecstatjson(text_rows, file_path, root, max_rows - len(rows)))
         elif module == "CellSqlStat":
             rows.extend(parse_cellsqlstat(text_rows, file_path, root, max_rows - len(rows)))
         elif module == "CellSrvStat":
@@ -356,6 +443,8 @@ def parse_tool(root_text: str, relative_tool_path: str, max_rows: int) -> pd.Dat
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df = df.dropna(subset=["timestamp"])
+    if module == "Diskinfo":
+        df = enrich_diskinfo_rates(df)
     return df.sort_values(["timestamp", "entity", "metric"])
 
 
@@ -411,6 +500,128 @@ def render_cellsqlstat(df: pd.DataFrame) -> None:
     visible = [col for col in preferred if col in detail.columns]
     rest = [col for col in detail.columns if col not in visible]
     st.dataframe(detail[visible + rest].head(1000), use_container_width=True, hide_index=True)
+
+
+def render_diskinfo(df: pd.DataFrame) -> None:
+    with st.expander("Diskinfo /proc/diskstats fields", expanded=False):
+        st.dataframe(
+            pd.DataFrame(
+                [{"Position": idx + 4, "Metric": metric, "Unit": unit} for idx, (metric, unit) in enumerate(DISKINFO_FIELDS)]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    families = sorted(df["device_family"].dropna().unique().tolist()) if "device_family" in df.columns else []
+    c1, c2 = st.columns([1, 2])
+    family = c1.selectbox("Device family", ["All"] + families, key="family_Diskinfo")
+    view = df.copy()
+    if family != "All":
+        view = view[view["device_family"] == family]
+
+    metric_names = sorted(view["metric"].dropna().unique().tolist())
+    default_metric = pick_default_diskinfo_metric(metric_names)
+    metric = c2.selectbox("Diskinfo metric", metric_names, index=metric_names.index(default_metric), key="metric_Diskinfo_special")
+    metric_df = view[view["metric"] == metric].copy()
+    device_names = sorted(metric_df["entity"].dropna().unique().tolist())
+    top_devices = metric_df.sort_values("value", ascending=False)["entity"].drop_duplicates().head(12).tolist()
+    devices = st.multiselect("Devices", device_names, default=top_devices, key="entity_Diskinfo_special")
+    if devices:
+        metric_df = metric_df[metric_df["entity"].isin(devices)]
+
+    if metric_df.empty:
+        st.info("No Diskinfo rows match the current selection.")
+    else:
+        pivot = metric_df.pivot_table(index="timestamp", columns="entity", values="value", aggfunc="max").sort_index()
+        st.line_chart(pivot, use_container_width=True)
+
+    preferred = ["timestamp", "entity", "device_family", "metric", "value", "unit", "derived", "source"]
+    visible = [col for col in preferred if col in view.columns]
+    rest = [col for col in view.columns if col not in visible]
+    st.dataframe(view[visible + rest].head(2000), use_container_width=True, hide_index=True)
+
+
+def pick_default_diskinfo_metric(metric_names: List[str]) -> str:
+    preferred = ["io_util_pct", "read_MBps", "write_MBps", "read_iops", "write_iops", "avg_queue_depth", "read_await_ms", "write_await_ms"]
+    for metric in preferred:
+        if metric in metric_names:
+            return metric
+    return metric_names[0]
+
+
+def render_ecstatjson(df: pd.DataFrame) -> None:
+    category_count = df["category"].nunique() if "category" in df.columns else 0
+    device_count = df["entity"].nunique()
+    stat_count = df["stat"].nunique() if "stat" in df.columns else df["metric"].nunique()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Categories", f"{category_count:,}")
+    c2.metric("Devices", f"{device_count:,}")
+    c3.metric("Stats", f"{stat_count:,}")
+
+    categories = sorted(df["category"].dropna().unique().tolist()) if "category" in df.columns else []
+    device_types = sorted(df["device_type"].dropna().unique().tolist()) if "device_type" in df.columns else []
+    measures = sorted(df["measure"].dropna().unique().tolist()) if "measure" in df.columns else []
+
+    c1, c2, c3 = st.columns(3)
+    category = c1.selectbox("Category", ["All"] + categories, key="category_ECStatJSON")
+    device_type = c2.selectbox("Device type", ["All"] + device_types, key="type_ECStatJSON")
+    measure = c3.selectbox("Measure", ["All"] + measures, key="measure_ECStatJSON")
+
+    view = df.copy()
+    if category != "All":
+        view = view[view["category"] == category]
+    if device_type != "All":
+        view = view[view["device_type"] == device_type]
+    if measure != "All":
+        view = view[view["measure"] == measure]
+    if view.empty:
+        st.info("No ECStatJSON rows match these filters.")
+        return
+
+    stats = sorted(view["stat"].dropna().unique().tolist()) if "stat" in view.columns else sorted(view["metric"].dropna().unique().tolist())
+    if not stats:
+        st.info("No ECStatJSON statistics were parsed for this selection.")
+        return
+    default_stat = pick_default_ecstatjson_stat(view, stats)
+    stat = st.selectbox("Statistic", stats, index=stats.index(default_stat), key="stat_ECStatJSON")
+    chart_df = view[view["stat"] == stat].copy() if "stat" in view.columns else view[view["metric"] == stat].copy()
+    device_names = sorted(chart_df["entity"].dropna().unique().tolist())
+    top_devices = chart_df.sort_values("value", ascending=False)["entity"].drop_duplicates().head(12).tolist()
+    devices = st.multiselect("Devices", device_names, default=top_devices, key="entity_ECStatJSON_special")
+    if devices:
+        chart_df = chart_df[chart_df["entity"].isin(devices)]
+
+    if chart_df.empty:
+        st.info("No ECStatJSON rows match the selected statistic/devices.")
+    else:
+        series_name = "entity"
+        pivot = chart_df.pivot_table(index="timestamp", columns=series_name, values="value", aggfunc="max").sort_index()
+        st.line_chart(pivot, use_container_width=True)
+
+    preferred = ["timestamp", "category", "entity", "device", "device_type", "stat", "measure", "metric", "value", "unit", "source"]
+    visible = [col for col in preferred if col in view.columns]
+    rest = [col for col in view.columns if col not in visible]
+    st.dataframe(view[visible + rest].head(2000), use_container_width=True, hide_index=True)
+
+
+def pick_default_ecstatjson_stat(df: pd.DataFrame, stats: List[str]) -> str:
+    preferred = [
+        "latency warning",
+        "oltp read hits",
+        "oltp write hits",
+        "dw read hits",
+        "client small read misses",
+        "client small write misses",
+        "fc metadata writes",
+    ]
+    lower_to_stat = {stat.lower(): stat for stat in stats}
+    for name in preferred:
+        if name in lower_to_stat:
+            return lower_to_stat[name]
+    ranked = df.groupby("stat")["value"].max().sort_values(ascending=False) if "stat" in df.columns else pd.Series(dtype=float)
+    if not ranked.empty:
+        return str(ranked.index[0])
+    return stats[0]
 
 
 def pivot_cellsqlstat(df: pd.DataFrame) -> pd.DataFrame:
@@ -994,6 +1205,145 @@ def parse_vmstat(lines: List[str], path: Path, root: Path, limit: int) -> List[D
     return rows[:limit]
 
 
+def parse_diskinfo(lines: List[str], path: Path, root: Path, limit: int) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    timestamp = timestamp_from_filename(path.name)
+    for line in lines:
+        if len(rows) >= limit:
+            break
+        stripped = line.strip()
+        zzz = ZZZ_RE.search(stripped)
+        if zzz:
+            timestamp = parse_any_timestamp(zzz.group(1)) or timestamp
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if len(parts) < 14 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        device = parts[2]
+        values = parts[3:]
+        item = row(timestamp, device, "major", float(parts[0]), "number", path, root)
+        item.update({"device": device, "major": parts[0], "minor": parts[1], "device_family": disk_device_family(device)})
+        rows.append(item)
+        item = row(timestamp, device, "minor", float(parts[1]), "number", path, root)
+        item.update({"device": device, "major": parts[0], "minor": parts[1], "device_family": disk_device_family(device)})
+        rows.append(item)
+        for idx, (metric, unit) in enumerate(DISKINFO_FIELDS):
+            if len(rows) >= limit:
+                break
+            if idx >= len(values) or not is_number(values[idx]):
+                continue
+            item = row(timestamp, device, metric, float(values[idx]), unit, path, root)
+            item.update({"device": device, "major": parts[0], "minor": parts[1], "device_family": disk_device_family(device)})
+            rows.append(item)
+        if len(rows) + 2 <= limit and len(values) >= 7:
+            sectors_read = parse_plain_number(values[2])
+            sectors_written = parse_plain_number(values[6])
+            if sectors_read is not None:
+                item = row(timestamp, device, "read_MB_total", sectors_read * 512 / 1024 / 1024, "MB", path, root)
+                item.update({"device": device, "major": parts[0], "minor": parts[1], "device_family": disk_device_family(device)})
+                rows.append(item)
+            if sectors_written is not None:
+                item = row(timestamp, device, "write_MB_total", sectors_written * 512 / 1024 / 1024, "MB", path, root)
+                item.update({"device": device, "major": parts[0], "minor": parts[1], "device_family": disk_device_family(device)})
+                rows.append(item)
+    return rows[:limit]
+
+
+def disk_device_family(device: str) -> str:
+    if device.startswith("nvme"):
+        return "NVMe"
+    if device.startswith("md"):
+        return "MD RAID"
+    if re.match(r"^sd[a-z]+$", device):
+        return "SCSI Disk"
+    if re.match(r"^.*p\d+$", device):
+        return "Partition"
+    return "Other"
+
+
+def enrich_diskinfo_rates(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    base = df[df["metric"].isin({"reads_completed", "writes_completed", "sectors_read", "sectors_written", "time_reading_ms", "time_writing_ms", "time_doing_io_ms", "weighted_time_doing_io_ms"})]
+    if base.empty:
+        return df
+    wide = base.pivot_table(
+        index=["timestamp", "entity", "source"],
+        columns="metric",
+        values="value",
+        aggfunc="max",
+    ).reset_index()
+    wide.columns.name = None
+    rate_rows: List[Dict[str, Any]] = []
+    for entity, group in wide.sort_values("timestamp").groupby("entity"):
+        previous: Optional[pd.Series] = None
+        for _, current in group.iterrows():
+            if previous is None:
+                previous = current
+                continue
+            seconds = (current["timestamp"] - previous["timestamp"]).total_seconds()
+            if seconds <= 0:
+                previous = current
+                continue
+            source = current["source"]
+            derived = diskinfo_derived_metrics(current, previous, seconds)
+            for metric, value, unit in derived:
+                if value is None or value < 0:
+                    continue
+                item = {
+                    "timestamp": current["timestamp"],
+                    "entity": entity,
+                    "metric": metric,
+                    "value": float(value),
+                    "unit": unit,
+                    "source": source,
+                    "device": entity,
+                    "device_family": disk_device_family(str(entity)),
+                    "derived": True,
+                }
+                rate_rows.append(item)
+    if not rate_rows:
+        return df
+    return pd.concat([df, pd.DataFrame(rate_rows)], ignore_index=True)
+
+
+def diskinfo_derived_metrics(current: pd.Series, previous: pd.Series, seconds: float) -> List[tuple[str, Optional[float], str]]:
+    read_ios = diff_metric(current, previous, "reads_completed")
+    write_ios = diff_metric(current, previous, "writes_completed")
+    sectors_read = diff_metric(current, previous, "sectors_read")
+    sectors_written = diff_metric(current, previous, "sectors_written")
+    read_time = diff_metric(current, previous, "time_reading_ms")
+    write_time = diff_metric(current, previous, "time_writing_ms")
+    busy_time = diff_metric(current, previous, "time_doing_io_ms")
+    weighted_time = diff_metric(current, previous, "weighted_time_doing_io_ms")
+    return [
+        ("read_iops", divide(read_ios, seconds), "iops"),
+        ("write_iops", divide(write_ios, seconds), "iops"),
+        ("read_MBps", divide(sectors_read * 512 / 1024 / 1024 if sectors_read is not None else None, seconds), "MB/s"),
+        ("write_MBps", divide(sectors_written * 512 / 1024 / 1024 if sectors_written is not None else None, seconds), "MB/s"),
+        ("read_await_ms", divide(read_time, read_ios), "ms"),
+        ("write_await_ms", divide(write_time, write_ios), "ms"),
+        ("io_util_pct", divide(busy_time, seconds * 10), "percent"),
+        ("avg_queue_depth", divide(weighted_time, seconds * 1000), "count"),
+    ]
+
+
+def diff_metric(current: pd.Series, previous: pd.Series, metric: str) -> Optional[float]:
+    if metric not in current or metric not in previous:
+        return None
+    if pd.isna(current[metric]) or pd.isna(previous[metric]):
+        return None
+    return float(current[metric]) - float(previous[metric])
+
+
+def divide(numerator: Optional[float], denominator: Optional[float]) -> Optional[float]:
+    if numerator is None or denominator in (None, 0):
+        return None
+    return numerator / denominator
+
+
 def parse_key_values(lines: List[str], path: Path, root: Path, module: str, limit: int) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     timestamp = timestamp_from_filename(path.name)
@@ -1027,6 +1377,131 @@ def parse_json_metrics(lines: List[str], path: Path, root: Path, module: str, li
     rows: List[Dict[str, Any]] = []
     walk_json(data, rows, timestamp_from_filename(path.name), "cell", "", path, root, limit)
     return rows
+
+
+def parse_ecstatjson(lines: List[str], path: Path, root: Path, limit: int) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for timestamp, data in extract_json_objects(lines, timestamp_from_filename(path.name)):
+        append_ecstatjson_rows(data, timestamp, rows, path, root, limit)
+        if len(rows) >= limit:
+            break
+    return rows[:limit]
+
+
+def extract_json_objects(lines: List[str], fallback_timestamp: str) -> List[tuple[str, Any]]:
+    objects: List[tuple[str, Any]] = []
+    timestamp = fallback_timestamp
+    collecting = False
+    depth = 0
+    buffer: List[str] = []
+    object_timestamp = timestamp
+    for line in lines:
+        stripped = line.strip()
+        if not collecting:
+            zzz = ZZZ_RE.search(stripped)
+            if zzz:
+                timestamp = parse_any_timestamp(zzz.group(1)) or timestamp
+                continue
+            if not stripped.startswith("{"):
+                continue
+            collecting = True
+            buffer = [line]
+            object_timestamp = timestamp
+            depth = stripped.count("{") - stripped.count("}")
+            if depth <= 0:
+                collecting = False
+        else:
+            buffer.append(line)
+            depth += stripped.count("{") - stripped.count("}")
+            if depth > 0:
+                continue
+            collecting = False
+
+        if buffer and depth <= 0:
+            try:
+                objects.append((object_timestamp, json.loads("\n".join(buffer))))
+            except Exception:
+                pass
+            buffer = []
+            depth = 0
+    return objects
+
+
+def append_ecstatjson_rows(data: Any, fallback_timestamp: str, rows: List[Dict[str, Any]], path: Path, root: Path, limit: int) -> None:
+    if not isinstance(data, dict):
+        return
+    for category, entries in data.items():
+        if len(rows) >= limit:
+            return
+        if isinstance(entries, list):
+            for entry in entries:
+                if len(rows) >= limit:
+                    return
+                if isinstance(entry, dict):
+                    append_ecstatjson_entry(str(category), entry, fallback_timestamp, rows, path, root, limit)
+        elif isinstance(entries, dict):
+            append_ecstatjson_entry(str(category), entries, fallback_timestamp, rows, path, root, limit)
+
+
+def append_ecstatjson_entry(
+    category: str,
+    entry: Dict[str, Any],
+    fallback_timestamp: str,
+    rows: List[Dict[str, Any]],
+    path: Path,
+    root: Path,
+    limit: int,
+) -> None:
+    name = str(entry.get("name") or entry.get("deviceName") or category)
+    device = str(entry.get("deviceName") or "")
+    device_type = str(entry.get("intendedDeviceType") or entry.get("xValidationDeviceType") or "")
+    timestamp = parse_any_timestamp(str(entry.get("timestampFormatted", ""))) or fallback_timestamp
+    stats = entry.get("stats", entry)
+    if not isinstance(stats, dict):
+        return
+    for stat_name, measures in stats.items():
+        if len(rows) >= limit:
+            return
+        if stat_name in {"name", "deviceName", "timestampFormatted", "timestamp", "intendedDeviceType", "xValidationDeviceType", "stats"}:
+            continue
+        if isinstance(measures, dict):
+            for measure, value in measures.items():
+                if len(rows) >= limit:
+                    return
+                if isinstance(value, (int, float)):
+                    metric = f"{stat_name} {measure}"
+                    item = row(timestamp, name, metric, float(value), ecstatjson_unit(str(measure)), path, root)
+                    item.update(
+                        {
+                            "category": category,
+                            "device": device,
+                            "device_type": device_type,
+                            "stat": str(stat_name),
+                            "measure": str(measure),
+                        }
+                    )
+                    rows.append(item)
+        elif isinstance(measures, (int, float)):
+            item = row(timestamp, name, str(stat_name), float(measures), "", path, root)
+            item.update(
+                {
+                    "category": category,
+                    "device": device,
+                    "device_type": device_type,
+                    "stat": str(stat_name),
+                    "measure": "value",
+                }
+            )
+            rows.append(item)
+
+
+def ecstatjson_unit(measure: str) -> str:
+    lower = measure.lower()
+    if lower == "bytes":
+        return "bytes"
+    if lower == "iops":
+        return "iops"
+    return ""
 
 
 def walk_json(value: Any, rows: List[Dict[str, Any]], timestamp: str, entity: str, prefix: str, path: Path, root: Path, limit: int) -> None:
@@ -1105,6 +1580,10 @@ def detect_numeric_problems(module: str, df: pd.DataFrame) -> List[Dict[str, Any
         return detect_cellsrvstat_problems(df)
     if module == "Cellmem":
         return detect_cellmem_problems(df)
+    if module == "ECStatJSON":
+        return detect_ecstatjson_problems(df)
+    if module == "Diskinfo":
+        return detect_diskinfo_problems(df)
     checks = [
         ("%util", 90, "critical", "High device utilization"),
         ("%util", 80, "warning", "Elevated device utilization"),
@@ -1194,6 +1673,67 @@ def detect_cellsrvstat_problems(df: pd.DataFrame) -> List[Dict[str, Any]]:
                 "value": round(float(worst["value"]), 3),
                 "source": worst["source"],
                 "detail": f"{worst.get('section', '')} / {worst.get('group', '')}",
+            }
+        )
+    return problems
+
+
+def detect_diskinfo_problems(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    checks = [
+        ("io_util_pct", 90, "critical", "High diskstats device utilization"),
+        ("io_util_pct", 75, "warning", "Elevated diskstats device utilization"),
+        ("read_await_ms", 50, "critical", "High diskstats read await"),
+        ("read_await_ms", 20, "warning", "Elevated diskstats read await"),
+        ("write_await_ms", 100, "critical", "High diskstats write await"),
+        ("write_await_ms", 50, "warning", "Elevated diskstats write await"),
+        ("avg_queue_depth", 32, "warning", "Elevated diskstats queue depth"),
+    ]
+    problems: List[Dict[str, Any]] = []
+    for metric, threshold, severity, title in checks:
+        subset = df[(df["metric"] == metric) & (df["value"] > threshold)]
+        if subset.empty:
+            continue
+        worst = subset.sort_values("value", ascending=False).iloc[0]
+        problems.append(
+            {
+                "severity": severity,
+                "tool": "Diskinfo",
+                "title": title,
+                "time": str(worst["timestamp"]),
+                "entity": worst["entity"],
+                "metric": metric,
+                "value": round(float(worst["value"]), 3),
+                "source": worst["source"],
+                "detail": worst.get("device_family", ""),
+            }
+        )
+    return problems
+
+
+def detect_ecstatjson_problems(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    problems: List[Dict[str, Any]] = []
+    signal_patterns = [
+        ("latency warning", "warning", "ECStatJSON latency warning counters"),
+        ("rejected", "warning", "ECStatJSON rejected cacheline counters"),
+        ("error", "critical", "ECStatJSON error counters"),
+        ("fail", "critical", "ECStatJSON failure counters"),
+    ]
+    for text, severity, title in signal_patterns:
+        subset = df[df["stat"].str.contains(text, case=False, na=False) & (df["value"] > 0)] if "stat" in df.columns else pd.DataFrame()
+        if subset.empty:
+            continue
+        worst = subset.sort_values("value", ascending=False).iloc[0]
+        problems.append(
+            {
+                "severity": severity,
+                "tool": "ECStatJSON",
+                "title": title,
+                "time": str(worst["timestamp"]),
+                "entity": worst["entity"],
+                "metric": worst["metric"],
+                "value": round(float(worst["value"]), 3),
+                "source": worst["source"],
+                "detail": f"{worst.get('category', '')} / {worst.get('device', '')}".strip(" /"),
             }
         )
     return problems

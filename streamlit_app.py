@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 import lzma
+import os
 import re
+import shlex
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +18,16 @@ import streamlit.components.v1 as components
 
 
 DEFAULT_PATH = "/root/PP/ExaWatcher_gru126171exdcl18.oraclecloud.internal_2026-05-13_19_00_00_3h00m00s"
+EXAWATCHER_HOME = Path("/Users/pporacle/opt/oracle.ExaWatcher")
+EXAWCHART = EXAWATCHER_HOME / "exawchart.py"
+EXAWCHART_COMPAT_DIR = Path(__file__).resolve().parent / "exawatcher_compat"
+EXAWCHART_DATE_MASK = "%Y%m%d%H%M.%S"
+EXAWCHART_TOOLS = ["Iostat", "CellSrvStat", "Mpstat", "Meminfo", "Cellmem", "Rocestat"]
+EXAWCHART_PYTHON_CANDIDATES = [
+    "/opt/homebrew/bin/python3.11",
+    "/usr/local/bin/python3.11",
+    "/usr/bin/python3",
+]
 HEADER_RE = re.compile(r"#\s*([^:]+):\s*(.*)")
 DATE_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2}:\d{2}\s+[AP]M)")
 ZZZ_RE = re.compile(r"zzz\s+<([^>]+)>")
@@ -129,6 +143,8 @@ class ToolSummary:
 def main() -> None:
     st.set_page_config(page_title="ExaWatcher Workbench", layout="wide")
     st.title("ExaWatcher Workbench")
+    if "active_tool" not in st.session_state:
+        st.session_state["active_tool"] = "parser"
 
     with st.sidebar:
         st.header("Source")
@@ -156,11 +172,23 @@ def main() -> None:
     total_size = sum(s.size_mb for s in summaries)
 
     st.caption(str(root))
+    nav1, nav2 = st.columns(2)
+    if nav1.button("Parser / Analysis Dashboard", type="primary" if st.session_state["active_tool"] == "parser" else "secondary", use_container_width=True):
+        st.session_state["active_tool"] = "parser"
+        st.rerun()
+    if nav2.button("Oracle Chart Generation", type="primary" if st.session_state["active_tool"] == "chart_generation" else "secondary", use_container_width=True):
+        st.session_state["active_tool"] = "chart_generation"
+        st.rerun()
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Tools gathered", len(summaries))
     c2.metric("Files", f"{total_files:,}")
     c3.metric("Size", f"{total_size:,.1f} MB")
     c4.metric("Period", f"{first_time or '?'} to {last_time or '?'}")
+
+    if st.session_state["active_tool"] == "chart_generation":
+        render_chart_generation_dashboard(root, summaries, first_time, last_time)
+        return
 
     tab_names = ["Summary", "Problems"] + [s.tool for s in summaries]
     tabs = st.tabs(tab_names)
@@ -252,6 +280,193 @@ def render_summary(summaries: List[ToolSummary]) -> None:
         for s in summaries
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def render_chart_generation_dashboard(root: Path, summaries: List[ToolSummary], first_time: str, last_time: str) -> None:
+    st.subheader("Oracle ExaWatcher chart generation")
+    st.caption("Runs the local Oracle chart generator with the same input tool set used by GetExaWatcherResults.sh.")
+
+    available_tools = [tool for tool in EXAWCHART_TOOLS if (root / f"{tool}.ExaWatcher").exists()]
+    missing_tools = [tool for tool in EXAWCHART_TOOLS if tool not in available_tools]
+    chart_xz_count = count_chartable_xz_files(root, available_tools)
+    host = infer_chart_host(root, summaries)
+    default_output = root / f"Charts.ExaWatcher.{host}"
+
+    c1, c2 = st.columns(2)
+    start_text = c1.text_input("From time", value=format_exawchart_time(first_time), help=f"Oracle chart mask: {EXAWCHART_DATE_MASK}")
+    end_text = c2.text_input("To time", value=format_exawchart_time(last_time), help=f"Oracle chart mask: {EXAWCHART_DATE_MASK}")
+    output_text = st.text_input("Output chart directory", value=str(default_output))
+
+    if available_tools:
+        st.write(f"Chart inputs: {', '.join(available_tools)} ({chart_xz_count:,} .xz files)")
+    if missing_tools:
+        st.caption("Not present in this bundle: " + ", ".join(missing_tools))
+
+    if not EXAWCHART.exists():
+        st.error(f"Oracle chart script not found: {EXAWCHART}")
+        return
+    if not available_tools:
+        st.warning("No Oracle chartable tool directories were found in the selected ExaWatcher directory.")
+        return
+    if chart_xz_count == 0:
+        st.warning("No .xz files were found in the Oracle chartable tool directories.")
+        return
+
+    chart_python = find_exawchart_python()
+    if not chart_python:
+        st.error("No Python interpreter with both distutils and lxml was found for Oracle exawchart.py.")
+        return
+
+    command = build_exawchart_command(root, Path(output_text).expanduser(), available_tools, start_text, end_text, chart_python)
+    st.code(shlex.join(command), language="bash")
+
+    if st.button("Generate Oracle Charts", type="primary"):
+        with st.spinner("Generating Oracle ExaWatcher charts..."):
+            try:
+                result = run_exawchart(command)
+            except subprocess.TimeoutExpired as exc:
+                result = subprocess.CompletedProcess(
+                    exc.cmd,
+                    124,
+                    str(exc.stdout or ""),
+                    f"{str(exc.stderr or '')}\nTimed out after {exc.timeout} seconds.",
+                )
+        st.session_state["last_chart_generation"] = {
+            "returncode": result.returncode,
+            "stdout": result.stdout[-12000:],
+            "stderr": result.stderr[-12000:],
+            "logs": read_recent_chart_logs(Path(output_text).expanduser()),
+            "output": output_text,
+        }
+        st.cache_data.clear()
+        html_files = list(Path(output_text).expanduser().rglob("*.html"))
+        if result.returncode == 0 and html_files:
+            st.success(f"Charts generated in {output_text}")
+        elif result.returncode == 0:
+            st.warning("The Oracle chart script finished, but no HTML chart files were produced. Check the output log below.")
+        else:
+            st.error(f"Chart generation failed with exit code {result.returncode}")
+
+    last = st.session_state.get("last_chart_generation")
+    if last:
+        with st.expander("Last chart generation output", expanded=last["returncode"] != 0):
+            st.write(f"Output directory: {last['output']}")
+            if last["stdout"]:
+                st.code(last["stdout"], language="text")
+            if last["stderr"]:
+                st.code(last["stderr"], language="text")
+            if last.get("logs"):
+                st.code(last["logs"], language="text")
+
+    chart_summaries = [summary for summary in scan_tools(str(root)) if summary.tool == "Charts"]
+    if chart_summaries:
+        st.divider()
+        selected_summary = chart_summaries[-1]
+        if len(chart_summaries) > 1:
+            labels = {summary.path: summary for summary in chart_summaries}
+            selected_path = st.selectbox("Generated chart folder", list(labels), index=len(labels) - 1)
+            selected_summary = labels[selected_path]
+        render_charts_tab(root, selected_summary)
+
+
+def build_exawchart_command(root: Path, output_dir: Path, tools: List[str], start_text: str, end_text: str, chart_python: str) -> List[str]:
+    input_patterns = " ".join(str(root / f"{tool}.ExaWatcher" / "*.xz") for tool in tools)
+    command = [
+        chart_python,
+        str(EXAWCHART),
+        "-z",
+        input_patterns,
+        "-m",
+        EXAWCHART_DATE_MASK,
+        "-o",
+        str(output_dir),
+    ]
+    if start_text.strip():
+        command.extend(["-f", start_text.strip()])
+    if end_text.strip():
+        command.extend(["-t", end_text.strip()])
+    return command
+
+
+def count_chartable_xz_files(root: Path, tools: List[str]) -> int:
+    return sum(1 for tool in tools for _path in (root / f"{tool}.ExaWatcher").glob("*.xz"))
+
+
+@st.cache_data(show_spinner=False)
+def find_exawchart_python() -> str:
+    candidates = [*EXAWCHART_PYTHON_CANDIDATES, sys.executable]
+    for candidate in candidates:
+        if not Path(candidate).exists():
+            continue
+        result = subprocess.run(
+            [candidate, "-c", "import distutils.spawn; import lxml; import exadata_img_pylogger"],
+            env=exawchart_env(),
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode == 0:
+            return candidate
+    return ""
+
+
+def run_exawchart(command: List[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=str(EXAWATCHER_HOME),
+        env=exawchart_env(),
+        text=True,
+        capture_output=True,
+        timeout=900,
+        check=False,
+    )
+
+
+def read_recent_chart_logs(output_dir: Path) -> str:
+    if not output_dir.exists():
+        return ""
+    logs = sorted(output_dir.rglob("exawchart.log"), key=lambda path: path.stat().st_mtime, reverse=True)
+    if not logs:
+        return ""
+    return logs[0].read_text(encoding="utf-8", errors="replace")[-12000:]
+
+
+def exawchart_env() -> Dict[str, str]:
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    paths = [str(EXAWCHART_COMPAT_DIR)]
+    if existing:
+        paths.append(existing)
+    env["PYTHONPATH"] = ":".join(paths)
+    return env
+
+
+def infer_chart_host(root: Path, summaries: List[ToolSummary]) -> str:
+    for summary in summaries:
+        if summary.files:
+            match = re.match(r"\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}_[A-Za-z0-9]+ExaWatcher_(.+?)\.dat", Path(summary.files[0]).name)
+            if match:
+                return safe_path_name(match.group(1))
+    match = re.match(r"ExaWatcher_(.+?)_\d{4}_\d{2}_\d{2}", root.name)
+    if match:
+        return safe_path_name(match.group(1))
+    return safe_path_name(root.name) or "local"
+
+
+def safe_path_name(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip())
+    return cleaned.strip("._")[:120]
+
+
+def format_exawchart_time(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return parsed.strftime(EXAWCHART_DATE_MASK)
 
 
 def render_charts_tab(root: Path, summary: ToolSummary) -> None:

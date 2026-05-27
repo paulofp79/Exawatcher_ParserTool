@@ -10,7 +10,9 @@ Recommended Streamlit workbench:
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8099
+scripts/appctl.sh start
+scripts/appctl.sh status
+scripts/appctl.sh stop
 ```
 
 Open `http://<server>:8099`, enter the ExaWatcher directory path, and click **Scan / Refresh**.

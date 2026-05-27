@@ -23,6 +23,8 @@ If the ExaWatcher bundle is on your laptop while the app is running on a remote 
 
 You can also choose **Upload local folder** and select an `archive` folder directly from your browser. The folder upload mode preserves nested tool directories such as `Iostat.ExaWatcher/` and `Vmstat.ExaWatcher/` while copying them into `data/uploads/` on the server.
 
+The app control script sets Streamlit's upload cap very high by default (`1048576` MB). You can still override it with `EXAWATCHER_MAX_UPLOAD_MB` before running `scripts/appctl.sh restart`.
+
 Legacy FastAPI backend:
 
 ```bash

@@ -17,6 +17,8 @@ scripts/appctl.sh stop
 
 Open `http://<server>:8099`, enter the ExaWatcher directory path, and click **Scan / Refresh**.
 
+For a path on the same machine running the app, you can point directly to either an `ExaWatcher_<host>...` directory or an `opt/oracle.ExaWatcher/archive` directory containing `*.ExaWatcher` tool folders.
+
 If the ExaWatcher bundle is on your laptop while the app is running on a remote server, use **Upload local archive** in the sidebar and upload a `.tar.bz2`, `.tar.gz`, `.tgz`, `.tar.xz`, or `.zip` bundle. Uploaded bundles are extracted under `data/uploads/` on the server and ignored by git.
 
 Legacy FastAPI backend:

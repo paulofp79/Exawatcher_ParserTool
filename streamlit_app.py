@@ -156,6 +156,7 @@ def main() -> None:
         root_text = ""
         if source_mode == "Server path":
             root_text = st.text_input("ExaWatcher directory", value=DEFAULT_PATH)
+            st.caption("Use a path that exists on the machine running this app. Your example `.../opt/oracle.ExaWatcher/archive` path works here when the app runs on that Mac.")
         else:
             uploaded_file = st.file_uploader(
                 "Upload ExaWatcher archive",
@@ -176,7 +177,7 @@ def main() -> None:
                 st.caption(f"Uploaded source: {root_text}")
         max_rows = st.slider("Rows per tool", 5_000, 100_000, 30_000, step=5_000)
         load = st.button("Scan / Refresh", type="primary")
-        st.caption("Server paths are read directly. Local machine paths must be uploaded as an archive.")
+        st.caption("For a remote app, local laptop folders must be uploaded as a compressed archive.")
 
     if load:
         st.cache_data.clear()
@@ -234,12 +235,12 @@ def main() -> None:
 
 
 def find_exawatcher_root(path: Path) -> Optional[Path]:
-    if path.exists() and path.is_dir() and any(child.name.endswith(".ExaWatcher") for child in path.iterdir() if child.is_dir()):
+    if path.exists() and path.is_dir() and has_exawatcher_dirs(path):
         return path
     if path.exists() and path.is_dir():
-        for candidate in path.rglob("ExaWatcher_*"):
-            if candidate.is_dir() and any(child.name.endswith(".ExaWatcher") for child in candidate.iterdir() if child.is_dir()):
-                return candidate
+        candidates = [candidate for candidate in path.rglob("*") if candidate.is_dir() and has_exawatcher_dirs(candidate)]
+        if candidates:
+            return sorted(candidates, key=lambda item: (-count_exawatcher_dirs(item), len(item.parts)))[0]
     return path
 
 
@@ -312,7 +313,13 @@ def ensure_safe_extract_path(destination: Path, member_name: str) -> None:
 
 
 def has_exawatcher_dirs(path: Path) -> bool:
-    return path.exists() and path.is_dir() and any(child.is_dir() and child.name.endswith(".ExaWatcher") for child in path.iterdir())
+    return count_exawatcher_dirs(path) > 0
+
+
+def count_exawatcher_dirs(path: Path) -> int:
+    if not path.exists() or not path.is_dir():
+        return 0
+    return sum(1 for child in path.iterdir() if child.is_dir() and child.name.endswith(".ExaWatcher"))
 
 
 def tool_name(path: Path) -> str:

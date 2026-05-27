@@ -176,24 +176,29 @@ def main() -> None:
             if root_text:
                 st.caption(f"Uploaded source: {root_text}")
         else:
-            uploaded_files = st.file_uploader(
-                "Choose ExaWatcher folder",
-                accept_multiple_files="directory",
-                help="Select an archive directory containing tool folders like Iostat.ExaWatcher and Vmstat.ExaWatcher.",
-            )
-            folder_disabled = not uploaded_files
-            if st.button("Load uploaded folder", disabled=folder_disabled):
-                try:
-                    uploaded_root = save_uploaded_folder(uploaded_files)
-                    st.session_state["uploaded_root"] = str(uploaded_root)
-                    st.cache_data.clear()
-                    st.success(f"Loaded uploaded folder: {uploaded_root}")
-                except Exception as exc:
-                    st.session_state.pop("uploaded_root", None)
-                    st.error(f"Folder upload failed: {exc}")
-            root_text = st.session_state.get("uploaded_root", "")
-            if root_text:
-                st.caption(f"Uploaded source: {root_text}")
+            if not supports_directory_upload():
+                st.warning(f"Folder upload requires Streamlit 1.52 or newer. This server is running Streamlit {st.__version__}.")
+                st.code("pip install -r requirements.txt\nscripts/appctl.sh restart", language="bash")
+                st.caption("Until Streamlit is upgraded, use Upload local archive with a `.tar.gz`, `.tar.bz2`, or `.zip` file.")
+            else:
+                uploaded_files = st.file_uploader(
+                    "Choose ExaWatcher folder",
+                    accept_multiple_files="directory",
+                    help="Select an archive directory containing tool folders like Iostat.ExaWatcher and Vmstat.ExaWatcher.",
+                )
+                folder_disabled = not uploaded_files
+                if st.button("Load uploaded folder", disabled=folder_disabled):
+                    try:
+                        uploaded_root = save_uploaded_folder(uploaded_files)
+                        st.session_state["uploaded_root"] = str(uploaded_root)
+                        st.cache_data.clear()
+                        st.success(f"Loaded uploaded folder: {uploaded_root}")
+                    except Exception as exc:
+                        st.session_state.pop("uploaded_root", None)
+                        st.error(f"Folder upload failed: {exc}")
+                root_text = st.session_state.get("uploaded_root", "")
+                if root_text:
+                    st.caption(f"Uploaded source: {root_text}")
         max_rows = st.slider("Rows per tool", 5_000, 100_000, 30_000, step=5_000)
         load = st.button("Scan / Refresh", type="primary")
         st.caption("For a remote app, local laptop paths must be sent with archive upload or folder upload.")
@@ -264,6 +269,18 @@ def find_exawatcher_root(path: Path) -> Optional[Path]:
         if candidates:
             return sorted(candidates, key=lambda item: (-count_exawatcher_dirs(item), len(item.parts)))[0]
     return path
+
+
+def supports_directory_upload() -> bool:
+    return streamlit_version_tuple() >= (1, 52, 0)
+
+
+def streamlit_version_tuple() -> tuple[int, int, int]:
+    parts = re.findall(r"\d+", getattr(st, "__version__", "0.0.0"))
+    values = [int(part) for part in parts[:3]]
+    while len(values) < 3:
+        values.append(0)
+    return tuple(values[:3])
 
 
 def save_uploaded_archive(uploaded_file: Any) -> Path:

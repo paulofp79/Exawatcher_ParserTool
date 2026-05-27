@@ -25,6 +25,28 @@ You can also choose **Upload local folder** and select an `archive` folder direc
 
 The app control script sets Streamlit's upload cap very high by default (`1048576` MB). You can still override it with `EXAWATCHER_MAX_UPLOAD_MB` before running `scripts/appctl.sh restart`.
 
+### Enable folder upload on Linux
+
+Streamlit folder upload requires Streamlit 1.52 or newer, and those Streamlit builds require Python 3.10 or newer. On Oracle Linux/RHEL-like hosts, use Python 3.11 for the app venv:
+
+```bash
+cd /root/PP/Exawatcher_ParserTool
+scripts/appctl.sh stop
+
+dnf install -y python3.11 python3.11-pip
+rm -rf .venv
+python3.11 -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python -c "import sys, streamlit; print(sys.version); print(streamlit.__version__)"
+
+scripts/appctl.sh start
+```
+
+If `dnf install -y python3.11 python3.11-pip` is not available on that host, stop there and check which Python 3.10+ packages are available before choosing another install method. Python 3.9 remains supported for server paths and archive upload, but not browser folder upload.
+
 Legacy FastAPI backend:
 
 ```bash

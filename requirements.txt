@@ -3,6 +3,7 @@ uvicorn[standard]>=0.30
 PyYAML>=6.0
 pytest>=8.0
 httpx>=0.27
-streamlit>=1.35,<1.51
+streamlit>=1.35,<1.51; python_version < "3.10"
+streamlit>=1.52,<1.58; python_version >= "3.10"
 pandas>=2.0,<2.3
 lxml>=5.0

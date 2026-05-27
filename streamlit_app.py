@@ -152,12 +152,12 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Source")
-        source_mode = st.radio("Input source", ["Server path", "Upload local archive"])
+        source_mode = st.radio("Input source", ["Server path", "Upload local archive", "Upload local folder"])
         root_text = ""
         if source_mode == "Server path":
             root_text = st.text_input("ExaWatcher directory", value=DEFAULT_PATH)
             st.caption("Use a path that exists on the machine running this app. Your example `.../opt/oracle.ExaWatcher/archive` path works here when the app runs on that Mac.")
-        else:
+        elif source_mode == "Upload local archive":
             uploaded_file = st.file_uploader(
                 "Upload ExaWatcher archive",
                 type=["zip", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz"],
@@ -175,15 +175,37 @@ def main() -> None:
             root_text = st.session_state.get("uploaded_root", "")
             if root_text:
                 st.caption(f"Uploaded source: {root_text}")
+        else:
+            uploaded_files = st.file_uploader(
+                "Choose ExaWatcher folder",
+                accept_multiple_files="directory",
+                help="Select an archive directory containing tool folders like Iostat.ExaWatcher and Vmstat.ExaWatcher.",
+            )
+            folder_disabled = not uploaded_files
+            if st.button("Load uploaded folder", disabled=folder_disabled):
+                try:
+                    uploaded_root = save_uploaded_folder(uploaded_files)
+                    st.session_state["uploaded_root"] = str(uploaded_root)
+                    st.cache_data.clear()
+                    st.success(f"Loaded uploaded folder: {uploaded_root}")
+                except Exception as exc:
+                    st.session_state.pop("uploaded_root", None)
+                    st.error(f"Folder upload failed: {exc}")
+            root_text = st.session_state.get("uploaded_root", "")
+            if root_text:
+                st.caption(f"Uploaded source: {root_text}")
         max_rows = st.slider("Rows per tool", 5_000, 100_000, 30_000, step=5_000)
         load = st.button("Scan / Refresh", type="primary")
-        st.caption("For a remote app, local laptop folders must be uploaded as a compressed archive.")
+        st.caption("For a remote app, local laptop paths must be sent with archive upload or folder upload.")
 
     if load:
         st.cache_data.clear()
 
-    if source_mode == "Upload local archive" and not root_text:
-        st.info("Upload a `.tar.bz2`, `.tar.gz`, `.tgz`, or `.zip` ExaWatcher bundle, then click Load uploaded archive.")
+    if source_mode != "Server path" and not root_text:
+        if source_mode == "Upload local archive":
+            st.info("Upload a `.tar.bz2`, `.tar.gz`, `.tgz`, or `.zip` ExaWatcher bundle, then click Load uploaded archive.")
+        else:
+            st.info("Choose your local `archive` folder, then click Load uploaded folder.")
         return
 
     root = find_exawatcher_root(Path(root_text).expanduser())
@@ -268,6 +290,54 @@ def save_uploaded_archive(uploaded_file: Any) -> Path:
     if not root or not root.exists() or not has_exawatcher_dirs(root):
         raise ValueError("The uploaded archive did not contain an ExaWatcher directory with *.ExaWatcher tool folders.")
     return root
+
+
+def save_uploaded_folder(uploaded_files: List[Any]) -> Path:
+    if not uploaded_files:
+        raise ValueError("No uploaded files were provided.")
+
+    digest = digest_uploaded_files(uploaded_files)
+    folder_name = uploaded_folder_name(uploaded_files)
+    case_dir = UPLOAD_ROOT / f"{folder_name}_{digest}"
+    files_dir = case_dir / "folder"
+
+    if not files_dir.exists() or not any(files_dir.iterdir()):
+        files_dir.mkdir(parents=True, exist_ok=True)
+        for uploaded_file in uploaded_files:
+            relative_path = uploaded_relative_path(uploaded_file.name)
+            target = files_dir / relative_path
+            ensure_safe_extract_path(files_dir, str(relative_path))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(uploaded_file.getbuffer())
+
+    root = find_exawatcher_root(files_dir)
+    if not root or not root.exists() or not has_exawatcher_dirs(root):
+        raise ValueError("The selected folder did not contain an ExaWatcher archive with *.ExaWatcher tool folders.")
+    return root
+
+
+def digest_uploaded_files(uploaded_files: List[Any]) -> str:
+    digest = hashlib.sha256()
+    for uploaded_file in uploaded_files:
+        digest.update(str(uploaded_file.name).encode("utf-8", errors="replace"))
+        digest.update(str(getattr(uploaded_file, "size", "")).encode("utf-8", errors="replace"))
+    return digest.hexdigest()[:16]
+
+
+def uploaded_folder_name(uploaded_files: List[Any]) -> str:
+    first_path = str(uploaded_files[0].name).replace("\\", "/")
+    first_part = next((part for part in first_path.split("/") if part and part not in {".", ".."}), "uploaded_folder")
+    if first_part.endswith(".ExaWatcher"):
+        return "archive"
+    return safe_upload_case_name(first_part)
+
+
+def uploaded_relative_path(name: str) -> Path:
+    normalized = str(name).replace("\\", "/").lstrip("/")
+    parts = [part for part in normalized.split("/") if part not in {"", "."}]
+    if not parts or any(part == ".." for part in parts):
+        raise ValueError(f"Unsafe uploaded path: {name}")
+    return Path(*parts)
 
 
 def safe_upload_filename(name: str) -> str:

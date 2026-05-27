@@ -21,6 +21,8 @@ For a path on the same machine running the app, you can point directly to either
 
 If the ExaWatcher bundle is on your laptop while the app is running on a remote server, use **Upload local archive** in the sidebar and upload a `.tar.bz2`, `.tar.gz`, `.tgz`, `.tar.xz`, or `.zip` bundle. Uploaded bundles are extracted under `data/uploads/` on the server and ignored by git.
 
+You can also choose **Upload local folder** and select an `archive` folder directly from your browser. The folder upload mode preserves nested tool directories such as `Iostat.ExaWatcher/` and `Vmstat.ExaWatcher/` while copying them into `data/uploads/` on the server.
+
 Legacy FastAPI backend:
 
 ```bash

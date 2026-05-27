@@ -10,6 +10,7 @@ PID_FILE="${EXAWATCHER_PID_FILE:-${RUN_DIR}/streamlit.pid}"
 LOG_FILE="${EXAWATCHER_LOG_FILE:-${RUN_DIR}/streamlit.log}"
 HOST="${EXAWATCHER_HOST:-0.0.0.0}"
 PORT="${EXAWATCHER_PORT:-8099}"
+MAX_UPLOAD_MB="${EXAWATCHER_MAX_UPLOAD_MB:-4096}"
 APP_FILE="${EXAWATCHER_APP_FILE:-${REPO_ROOT}/streamlit_app.py}"
 
 usage() {
@@ -19,6 +20,8 @@ Usage: $0 {start|stop|restart|status|logs}
 Environment overrides:
   EXAWATCHER_HOST       Bind address, default: 0.0.0.0
   EXAWATCHER_PORT       Port, default: 8099
+  EXAWATCHER_MAX_UPLOAD_MB
+                         Browser upload limit in MB, default: 4096
   EXAWATCHER_RUN_DIR    Runtime dir, default: <repo>/.run
   EXAWATCHER_LOG_FILE   Log file, default: <repo>/.run/streamlit.log
   EXAWATCHER_PID_FILE   PID file, default: <repo>/.run/streamlit.pid
@@ -70,6 +73,7 @@ start_app() {
   nohup "${bin}" run "${APP_FILE}" \
     --server.address "${HOST}" \
     --server.port "${PORT}" \
+    --server.maxUploadSize "${MAX_UPLOAD_MB}" \
     > "${LOG_FILE}" 2>&1 &
   printf '%s\n' "$!" > "${PID_FILE}"
 
@@ -121,6 +125,7 @@ status_app() {
     printf '%s is running.\n' "${APP_NAME}"
     printf 'PID: %s\n' "${pid}"
     printf 'Bind: %s:%s\n' "${HOST}" "${PORT}"
+    printf 'Max upload: %s MB\n' "${MAX_UPLOAD_MB}"
     printf 'URL: http://127.0.0.1:%s\n' "${PORT}"
     printf 'Log: %s\n' "${LOG_FILE}"
     return 0

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import lzma
+import hashlib
 import os
 import re
 import shlex
 import subprocess
 import sys
+import tarfile
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +21,7 @@ import streamlit.components.v1 as components
 
 
 DEFAULT_PATH = "/root/PP/ExaWatcher_gru126171exdcl18.oraclecloud.internal_2026-05-13_19_00_00_3h00m00s"
+UPLOAD_ROOT = Path(__file__).resolve().parent / "data" / "uploads"
 EXAWATCHER_HOME = Path("/Users/pporacle/opt/oracle.ExaWatcher")
 EXAWCHART = EXAWATCHER_HOME / "exawchart.py"
 EXAWCHART_COMPAT_DIR = Path(__file__).resolve().parent / "exawatcher_compat"
@@ -148,13 +152,38 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Source")
-        root_text = st.text_input("ExaWatcher directory", value=DEFAULT_PATH)
+        source_mode = st.radio("Input source", ["Server path", "Upload local archive"])
+        root_text = ""
+        if source_mode == "Server path":
+            root_text = st.text_input("ExaWatcher directory", value=DEFAULT_PATH)
+        else:
+            uploaded_file = st.file_uploader(
+                "Upload ExaWatcher archive",
+                type=["zip", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz"],
+            )
+            upload_disabled = uploaded_file is None
+            if st.button("Load uploaded archive", disabled=upload_disabled):
+                try:
+                    uploaded_root = save_uploaded_archive(uploaded_file)
+                    st.session_state["uploaded_root"] = str(uploaded_root)
+                    st.cache_data.clear()
+                    st.success(f"Loaded uploaded bundle: {uploaded_root}")
+                except Exception as exc:
+                    st.session_state.pop("uploaded_root", None)
+                    st.error(f"Upload import failed: {exc}")
+            root_text = st.session_state.get("uploaded_root", "")
+            if root_text:
+                st.caption(f"Uploaded source: {root_text}")
         max_rows = st.slider("Rows per tool", 5_000, 100_000, 30_000, step=5_000)
         load = st.button("Scan / Refresh", type="primary")
-        st.caption("This Streamlit version reads the ExaWatcher files directly on the server.")
+        st.caption("Server paths are read directly. Local machine paths must be uploaded as an archive.")
 
     if load:
         st.cache_data.clear()
+
+    if source_mode == "Upload local archive" and not root_text:
+        st.info("Upload a `.tar.bz2`, `.tar.gz`, `.tgz`, or `.zip` ExaWatcher bundle, then click Load uploaded archive.")
+        return
 
     root = find_exawatcher_root(Path(root_text).expanduser())
     if not root or not root.exists():
@@ -212,6 +241,78 @@ def find_exawatcher_root(path: Path) -> Optional[Path]:
             if candidate.is_dir() and any(child.name.endswith(".ExaWatcher") for child in candidate.iterdir() if child.is_dir()):
                 return candidate
     return path
+
+
+def save_uploaded_archive(uploaded_file: Any) -> Path:
+    if uploaded_file is None:
+        raise ValueError("No uploaded file was provided.")
+
+    data = uploaded_file.getbuffer()
+    digest = hashlib.sha256(data).hexdigest()[:16]
+    filename = safe_upload_filename(uploaded_file.name)
+    case_name = safe_upload_case_name(filename)
+    case_dir = UPLOAD_ROOT / f"{case_name}_{digest}"
+    archive_path = case_dir / filename
+    extracted_dir = case_dir / "extracted"
+
+    case_dir.mkdir(parents=True, exist_ok=True)
+    if not archive_path.exists():
+        archive_path.write_bytes(data)
+
+    if not extracted_dir.exists() or not any(extracted_dir.iterdir()):
+        extracted_dir.mkdir(parents=True, exist_ok=True)
+        extract_uploaded_archive(archive_path, extracted_dir)
+
+    root = find_exawatcher_root(extracted_dir)
+    if not root or not root.exists() or not has_exawatcher_dirs(root):
+        raise ValueError("The uploaded archive did not contain an ExaWatcher directory with *.ExaWatcher tool folders.")
+    return root
+
+
+def safe_upload_filename(name: str) -> str:
+    filename = Path(name or "exawatcher_upload").name
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", filename).strip("._")
+    return cleaned or "exawatcher_upload"
+
+
+def safe_upload_case_name(filename: str) -> str:
+    stem = re.sub(r"(?i)\.(tar\.(bz2|gz|xz)|tbz2|tgz|txz|zip|tar)$", "", filename)
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._")
+    return (cleaned or "exawatcher_upload")[:120]
+
+
+def extract_uploaded_archive(archive_path: Path, destination: Path) -> None:
+    if zipfile.is_zipfile(archive_path):
+        with zipfile.ZipFile(archive_path) as archive:
+            for member in archive.infolist():
+                ensure_safe_extract_path(destination, member.filename)
+                archive.extract(member, destination)
+        return
+
+    try:
+        with tarfile.open(archive_path, "r:*") as archive:
+            members = []
+            for member in archive.getmembers():
+                ensure_safe_extract_path(destination, member.name)
+                if member.issym() or member.islnk():
+                    continue
+                members.append(member)
+            archive.extractall(destination, members=members)
+    except tarfile.TarError as exc:
+        raise ValueError("Uploaded file must be a supported archive: .tar, .tar.bz2, .tar.gz, .tgz, .tar.xz, or .zip") from exc
+
+
+def ensure_safe_extract_path(destination: Path, member_name: str) -> None:
+    target = (destination / member_name).resolve()
+    base = destination.resolve()
+    try:
+        target.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(f"Archive member escapes the upload directory: {member_name}") from exc
+
+
+def has_exawatcher_dirs(path: Path) -> bool:
+    return path.exists() and path.is_dir() and any(child.is_dir() and child.name.endswith(".ExaWatcher") for child in path.iterdir())
 
 
 def tool_name(path: Path) -> str:

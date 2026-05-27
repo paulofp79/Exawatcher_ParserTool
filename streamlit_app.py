@@ -177,9 +177,19 @@ def main() -> None:
                 st.caption(f"Uploaded source: {root_text}")
         else:
             if not supports_directory_upload():
-                st.warning(f"Folder upload requires Streamlit 1.52 or newer. This server is running Streamlit {st.__version__}.")
-                st.code("pip install -r requirements.txt\nscripts/appctl.sh restart", language="bash")
-                st.caption("Until Streamlit is upgraded, use Upload local archive with a `.tar.gz`, `.tar.bz2`, or `.zip` file.")
+                st.warning(
+                    f"Folder upload requires Streamlit 1.52 or newer. This server is running Streamlit {st.__version__}."
+                )
+                st.caption(
+                    "On Python 3.9, the available Streamlit package may stop at 1.50, so use Upload local archive "
+                    "with a `.tar.gz`, `.tar.bz2`, `.tar.xz`, or `.zip` file."
+                )
+                st.code(
+                    "cd /path/to/opt/oracle.ExaWatcher\n"
+                    "tar -czf exawatcher_archive.tgz archive\n"
+                    "# Then upload exawatcher_archive.tgz with Upload local archive.",
+                    language="bash",
+                )
             else:
                 uploaded_files = st.file_uploader(
                     "Choose ExaWatcher folder",

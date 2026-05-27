@@ -21,7 +21,7 @@ For a path on the same machine running the app, you can point directly to either
 
 If the ExaWatcher bundle is on your laptop while the app is running on a remote server, use **Upload local archive** in the sidebar and upload a `.tar.bz2`, `.tar.gz`, `.tgz`, `.tar.xz`, or `.zip` bundle. Uploaded bundles are extracted under `data/uploads/` on the server and ignored by git.
 
-You can also choose **Upload local folder** and select an `archive` folder directly from your browser. The folder upload mode preserves nested tool directories such as `Iostat.ExaWatcher/` and `Vmstat.ExaWatcher/` while copying them into `data/uploads/` on the server.
+You can also choose **Upload local folder** and select an `archive` folder directly from your browser when your Streamlit version supports directory upload. Python 3.9 environments may only have Streamlit up to 1.50 available, so use **Upload local archive** there. Folder upload mode preserves nested tool directories such as `Iostat.ExaWatcher/` and `Vmstat.ExaWatcher/` while copying them into `data/uploads/` on the server.
 
 The app control script sets Streamlit's upload cap very high by default (`1048576` MB). You can still override it with `EXAWATCHER_MAX_UPLOAD_MB` before running `scripts/appctl.sh restart`.
 
